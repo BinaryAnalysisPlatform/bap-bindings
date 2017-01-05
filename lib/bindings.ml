@@ -1,8 +1,8 @@
 open Core_kernel.Std
+open Regular.Std
 open Bap.Std
 open Bap_plugins.Std
 open Format
-
 
 include Self()
 
@@ -10,8 +10,15 @@ module Make( Internal : Cstubs_inverted.INTERNAL) =
 struct
   module C = Ctypes
 
+  type 'a opaque = {
+    total  : 'a C.typ;
+    nullable  : 'a option C.typ;
+  }
+
   module Opaque = struct
     open Ctypes
+
+    type 'a t = 'a opaque
 
     type c = C
 
@@ -33,7 +40,30 @@ struct
         "Type error: expected a value of type %s, but got %s"
         name got ()
 
-    let datatype name =
+    (* let datatype name = *)
+    (*   let name = "bap_" ^ name in *)
+    (*   incr registered; *)
+    (*   let typeid = !registered in *)
+    (*   Hashtbl.set typenames ~key:typeid ~data:name; *)
+    (*   let finalise repr_ptr = *)
+    (*     Root.release (getf !@repr_ptr value) in *)
+    (*   let read repr_ptr = *)
+    (*     let repr = !@repr_ptr in *)
+    (*     let id = getf repr tag in *)
+    (*     if id <> typeid then type_error name id; *)
+    (*     Root.get (getf repr value) in *)
+    (*   let write oval = *)
+    (*     let repr = make t in *)
+    (*     setf repr tag typeid; *)
+    (*     setf repr value (Root.create oval); *)
+    (*     allocate ~finalise t repr in *)
+    (*   Internal.typedef opaque_ptr name; *)
+    (*   view *)
+    (*     ~format_typ:(fun k ppf -> fprintf ppf "%s%t" name k) *)
+    (*     ~read ~write opaque_ptr *)
+
+
+    let newtype name =
       let name = "bap_" ^ name in
       incr registered;
       let typeid = !registered in
@@ -41,20 +71,29 @@ struct
       let finalise repr_ptr =
         Root.release (getf !@repr_ptr value) in
       let read repr_ptr =
-        let repr = !@repr_ptr in
-        let id = getf repr tag in
-        if id <> typeid then type_error name id;
-        Root.get (getf repr value) in
+          let repr = !@repr_ptr in
+          let id = getf repr tag in
+          if id <> typeid then type_error name id;
+          Root.get (getf repr value) in
       let write oval =
         let repr = make t in
-        setf repr tag typeid;
-        setf repr value (Root.create oval);
-        allocate ~finalise t repr in
+          setf repr tag typeid;
+          setf repr value (Root.create oval);
+          allocate ~finalise t repr in
+      let read_opt ptr =
+        if is_null ptr then None
+        else read ptr in
+      let write_opt = function
+        | None -> from_voidp t null
+        | Some oval -> write oval in
       Internal.typedef opaque_ptr name;
-      view
-        ~format_typ:(fun k ppf -> fprintf ppf "%s%t" name k)
-        ~read ~write opaque_ptr
-
+      let make_typ read write = view
+          ~format_typ:(fun k ppf -> fprintf ppf "%s%t" name k)
+          ~read ~write opaque_ptr in
+      {
+        total = make_typ read write;
+        nullable = make_typ read_opt write_opt;
+      }
   end
 
   type 'a ctype = 'a Ctypes.typ
@@ -67,57 +106,95 @@ struct
 
   let version () = Config.version
 
+  module Error = struct
+    let current_error : Error.t option ref = ref None
+
+    let set err = current_error := Some err
+    let clear () = current_error := None
+
+    let () =
+      def "error_get" C.(void @-> returning string)
+        (fun () -> match current_error with
+           | {contents=None} -> "unknown error (if any)"
+           | {contents=Some err} -> Error.to_string_hum err);
+  end
+
   let () =
     def "version" C.(void @-> returning string) version;
     def "_standalone_init" C.(int @-> ptr string @-> returning int)
-      standalone_init;
+      standalone_init
+
+  let regular (type t) (module T : Regular.S with type t = t) t name =
+    let def fn = def (name ^ "_" ^ fn) in
+    def "to_string" C.(t @-> returning string) T.to_string;
+    def "compare" C.(t @-> t @-> returning int) T.compare;
+    def "equal"   C.(t @-> t @-> returning bool) T.equal;
+    def "hash"    C.(t @-> returning int) T.hash;
 
   module Endian = struct
     module T = struct
       type t = Word.endian
     end
 
-    let t : endian ctype = Opaque.datatype "endian_t"
+    let {total; nullable} : endian opaque = Opaque.newtype "endian_t"
   end
 
   module Size = struct
-    let t : size ctype = Opaque.datatype "size_t"
-    let addr : addr_size ctype = Opaque.datatype "addr_size_t"
+    let {total; nullable} : size opaque = Opaque.newtype "size_t"
+    module Addr = struct
+      let {total; nullable} : addr_size opaque =
+        Opaque.newtype "addr_size_t"
+    end
   end
 
 
   module Arch = struct
-    let t : arch Ctypes.typ = Opaque.datatype "arch_t"
-    let t_option : arch option Ctypes.typ = Opaque.datatype "arch_option_t"
+    let {total; nullable} : arch opaque = Opaque.newtype "arch_t"
 
     let def name typ impl =
       def ("arch_" ^ name) typ impl
 
     let () =
-      def "endian" C.(t @-> returning Endian.t) Arch.endian;
-      def "addr_size" C.(t @-> returning Size.addr) Arch.addr_size;
-      def "create" C.(string @-> returning t_option) Arch.of_string;
+      regular (module Arch) total "arch";
+      def "endian" C.(total @-> returning Endian.total) Arch.endian;
+      def "addr_size" C.(total @-> returning Size.Addr.total) Arch.addr_size;
+      def "create" C.(string @-> returning nullable) Arch.of_string;
 
       List.iter Arch.all ~f:(fun arch ->
           let name = Sexp.to_string (sexp_of_arch arch) in
-          def name C.(void @-> returning t) (fun () -> arch))
+          def name C.(void @-> returning total) (fun () -> arch))
   end
 
   module Project = struct
-    let t : project ctype = Opaque.datatype "project_t"
-    let project_t = t
+    let {total; nullable} : project opaque = Opaque.newtype "project_t"
+    let project_t = total
+    let project_or_null = nullable
 
     let def name typ impl =
       def ("project_" ^ name) typ impl
 
     module Input = struct
-      let t : Project.input ctype = Opaque.datatype "project_input_t"
+      let {total=t} : Project.input opaque = Opaque.newtype "project_input_t"
 
       let def name typ impl = def ("input_" ^ name) typ impl
 
       let () =
         def "file" C.(string @-> string_opt @-> returning t)
-          (fun filename loader -> Project.Input.file ?loader ~filename)
+          (fun filename loader -> Project.Input.file ?loader ~filename);
     end
+
+    let lift_error f x = match f x with
+      | Ok x -> Some x
+      | Error err -> Error.set err; None
+
+    let () =
+      def "create" C.(Input.t @-> returning nullable)
+        (lift_error Project.create);
+
+      def "arch" C.(project_t @-> returning Arch.total)
+        Project.arch
+
+
+
   end
 end
