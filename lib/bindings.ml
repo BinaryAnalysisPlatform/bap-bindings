@@ -27,58 +27,108 @@ struct
     nullable  : 'a option C.typ;
   }
 
+  let def name = Internal.internal ("bap_" ^ name)
+
+  module OString = struct
+    module Array = C.CArray
+    module Pool = Nativeint.Table
+
+    let managed = Pool.create ~size:1024 ()
+
+    let addr ptr =
+      C.to_voidp ptr |>
+      C.raw_address_of_ptr
+
+    let is_managed ptr = Hashtbl.mem managed (addr ptr)
+
+    let release ptr = Hashtbl.remove managed (addr ptr)
+
+    let str_of_ptr ptr = C.string_of (C.ptr C.void) (C.to_voidp ptr)
+
+    let expect_managed ptr =
+      invalid_argf "Object at %s is not managed by ocaml"
+        (str_of_ptr ptr) ()
+
+    let size ptr =
+      match Hashtbl.find managed (addr ptr) with
+      | None -> expect_managed ptr
+      | Some arr -> Array.length arr - 1
+
+    let read ptr =
+      match Hashtbl.find managed (addr ptr) with
+      | None -> expect_managed ptr
+      | Some arr ->
+        String.init (Array.length arr) ~f:(Array.get arr)
+
+    let write str =
+      let len = String.length str + 1 in
+      let arr = Array.make C.char len in
+      for i = 0 to len - 2 do
+        arr.(i) <- str.[i];
+      done;
+      arr.(len - 1) <- '\x00';
+      let kind = Bigarray.char in
+      let barr = C.bigarray_of_array C.array1 kind arr in
+      let ptr = C.bigarray_start C.array1 barr in
+      Hashtbl.set managed ~key:(addr ptr) ~data:arr;
+      ptr
+
+    let () = def "strlen" C.(ptr char @-> returning int) size
+
+    let t : string C.typ = C.view ~read ~write (C.ptr C.char)
+  end
+
   module Opaque = struct
     open Ctypes
 
     type 'a t = 'a opaque
 
+    type 'a fat = {
+      typeid : int;
+      ovalue : 'a;
+    }
+
+    type typeinfo = {
+      name : string;
+    }
+
     type c = C
 
-    let t : c structure typ = structure "bap_opaque_t"
-    let tag = field t "bap_opaque_tag" int
-    let value = field t "bap_opaque_value" (ptr void)
-    let () = seal t
-
-    let opaque_ptr = ptr t
-
     let registered = ref 0
-    let typenames = Int.Table.create ~size:1024 ()
+    let typeinfo = Int.Table.create ~size:1024 ()
 
     let type_error name id =
-      let got = match Hashtbl.find typenames id with
+      let got = match Hashtbl.find typeinfo id with
         | None -> "<unknown>"
-        | Some name -> name in
+        | Some {name} -> name in
       invalid_argf
         "Type error: expected a value of type %s, but got %s"
         name got ()
+
+
+
 
     let newtype name =
       let name = "bap_" ^ name in
       incr registered;
       let typeid = !registered in
-      Hashtbl.set typenames ~key:typeid ~data:name;
-      let finalise repr_ptr =
-        Root.release (getf !@repr_ptr value) in
-      let read repr_ptr =
-          let repr = !@repr_ptr in
-          let id = getf repr tag in
-          if id <> typeid then type_error name id;
-          Root.get (getf repr value) in
-      let write oval =
-        let repr = make t in
-          setf repr tag typeid;
-          setf repr value (Root.create oval);
-          allocate ~finalise t repr in
+      let t : c structure typ = structure name in
+      Internal.typedef t name;
+      Hashtbl.set typeinfo ~key:typeid ~data:{name};
+      let read opaque =
+        let {typeid=id; ovalue} = Root.get (to_voidp opaque) in
+        if id <> typeid then type_error name id;
+        ovalue in
+      let write ovalue =
+        from_voidp t (Root.create {typeid; ovalue}) in
       let read_opt ptr =
         if is_null ptr then None
         else read ptr in
       let write_opt = function
         | None -> from_voidp t null
         | Some oval -> write oval in
-      Internal.typedef opaque_ptr name;
       let make_typ read write = view
-          ~format_typ:(fun k ppf -> fprintf ppf "%s%t" name k)
-          ~read ~write opaque_ptr in
+          ~read ~write (ptr t) in
       {
         total = make_typ read write;
         nullable = make_typ read_opt write_opt;
@@ -87,8 +137,12 @@ struct
 
   type 'a ctype = 'a Ctypes.typ
 
-  let def name = Internal.internal ("bap_" ^ name)
+  let free ptr =
+    if OString.is_managed ptr then OString.release ptr
+    else C.Root.release ptr
 
+  let () =
+    def "free" C.(ptr void @-> returning void) free
 
   let standalone_init argc argv =
     try Plugins.run (); 0 with _ -> 1
@@ -102,7 +156,7 @@ struct
     let clear () = current_error := None
 
     let () =
-      def "error_get" C.(void @-> returning string)
+      def "error_get" C.(void @-> returning OString.t)
         (fun () -> match current_error with
            | {contents=None} -> "unknown error (if any)"
            | {contents=Some err} -> Error.to_string_hum err);
@@ -115,7 +169,7 @@ struct
 
   let regular (type t) (module T : Regular.S with type t = t) t name =
     let def fn = def (name ^ "_" ^ fn) in
-    def "to_string" C.(t @-> returning string) T.to_string;
+    def "to_string" C.(t @-> returning OString.t) T.to_string;
     def "compare" C.(t @-> t @-> returning int) T.compare;
     def "equal"   C.(t @-> t @-> returning bool) T.equal;
     def "hash"    C.(t @-> returning int) T.hash;
@@ -161,8 +215,36 @@ struct
       List.iter Arch.all ~f:(fun arch ->
           let name = Sexp.to_string (sexp_of_arch arch) in
           def name C.(void @-> returning total) (fun () -> arch));
+  end
+
+  module Term = struct
+    type enum =
+        Top | Sub | Arg | Blk | Def | Phi | Jmp
+    [@@deriving sexp, enumerate]
 
 
+    let def name typ impl =
+      def ("term_" ^ name) typ impl
+
+    let tag = Term.switch
+        ~program:(fun _ -> Top)
+        ~sub:(fun _ -> Sub)
+        ~arg:(fun _ -> Arg)
+        ~blk:(fun _ -> Blk)
+        ~phi:(fun _ -> Phi)
+        ~def:(fun _ -> Def)
+        ~jmp:(fun _ -> Jmp)
+
+    let () =
+      let {total; nullable} : _ opaque = Opaque.newtype "term_t" in
+      let _term_tag = enum "bap_term" sexp_of_enum all_of_enum in
+      def "name" C.(total @-> returning string) Term.name;
+      def "clone" C.(total @-> returning total) Term.clone;
+      ()
+
+  end
+
+  module Program = struct
 
   end
 
