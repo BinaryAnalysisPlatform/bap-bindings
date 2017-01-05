@@ -10,6 +10,18 @@ module Make( Internal : Cstubs_inverted.INTERNAL) =
 struct
   module C = Ctypes
 
+
+  let enum ?(first=0) name sexp cases =
+    let pref = String.uppercase name in
+    let t =
+      C.view ~format_typ:(fun k ppf -> fprintf ppf "enum %s_tag%t" name k)
+        ~read:ident ~write:ident C.int in
+    let cases = List.mapi cases ~f:(fun i x ->
+        let name = String.uppercase (Sexp.to_string (sexp x)) in
+        pref ^ "_" ^ name, Int64.of_int (first + i)) in
+    Internal.enum cases t;
+    t
+
   type 'a opaque = {
     total  : 'a C.typ;
     nullable  : 'a option C.typ;
@@ -39,29 +51,6 @@ struct
       invalid_argf
         "Type error: expected a value of type %s, but got %s"
         name got ()
-
-    (* let datatype name = *)
-    (*   let name = "bap_" ^ name in *)
-    (*   incr registered; *)
-    (*   let typeid = !registered in *)
-    (*   Hashtbl.set typenames ~key:typeid ~data:name; *)
-    (*   let finalise repr_ptr = *)
-    (*     Root.release (getf !@repr_ptr value) in *)
-    (*   let read repr_ptr = *)
-    (*     let repr = !@repr_ptr in *)
-    (*     let id = getf repr tag in *)
-    (*     if id <> typeid then type_error name id; *)
-    (*     Root.get (getf repr value) in *)
-    (*   let write oval = *)
-    (*     let repr = make t in *)
-    (*     setf repr tag typeid; *)
-    (*     setf repr value (Root.create oval); *)
-    (*     allocate ~finalise t repr in *)
-    (*   Internal.typedef opaque_ptr name; *)
-    (*   view *)
-    (*     ~format_typ:(fun k ppf -> fprintf ppf "%s%t" name k) *)
-    (*     ~read ~write opaque_ptr *)
-
 
     let newtype name =
       let name = "bap_" ^ name in
@@ -154,15 +143,27 @@ struct
     let def name typ impl =
       def ("arch_" ^ name) typ impl
 
+    let name arch = Sexp.to_string (sexp_of_arch arch)
+
+    let arches = Array.of_list Arch.all
+
+    let get_tag arch =
+      Array.findi_exn arches ~f:(fun i a -> Arch.equal a arch) |> fst
+
     let () =
       regular (module Arch) total "arch";
+      let bap_arch_tag = enum "bap_arch" sexp_of_arch Arch.all in
+      def "tag" C.(total @-> returning bap_arch_tag) get_tag;
+      def "create" C.(bap_arch_tag @-> returning total) (fun i -> arches.(i));
       def "endian" C.(total @-> returning Endian.total) Arch.endian;
       def "addr_size" C.(total @-> returning Size.Addr.total) Arch.addr_size;
-      def "create" C.(string @-> returning nullable) Arch.of_string;
-
+      def "of_string" C.(string @-> returning nullable) Arch.of_string;
       List.iter Arch.all ~f:(fun arch ->
           let name = Sexp.to_string (sexp_of_arch arch) in
-          def name C.(void @-> returning total) (fun () -> arch))
+          def name C.(void @-> returning total) (fun () -> arch));
+
+
+
   end
 
   module Project = struct
