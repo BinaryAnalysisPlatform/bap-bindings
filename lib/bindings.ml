@@ -163,7 +163,7 @@ struct
   end
 
   let () =
-    def "version" C.(void @-> returning string) version;
+    def "version" C.(void @-> returning OString.t) version;
     def "_standalone_init" C.(int @-> ptr string @-> returning int)
       standalone_init
 
@@ -238,7 +238,7 @@ struct
     let () =
       let {total; nullable} : _ opaque = Opaque.newtype "term_t" in
       let _term_tag = enum "bap_term" sexp_of_enum all_of_enum in
-      def "name" C.(total @-> returning string) Term.name;
+      def "name" C.(total @-> returning OString.t) Term.name;
       def "clone" C.(total @-> returning total) Term.clone;
       ()
 
