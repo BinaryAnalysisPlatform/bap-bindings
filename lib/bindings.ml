@@ -9,7 +9,6 @@ include Self()
 let obj_addr x =
   Nativeint.shift_left (Nativeint.of_int (Obj.magic x)) 1
 
-
 module Make( Internal : Cstubs_inverted.INTERNAL) =
 struct
   module C = Ctypes
@@ -173,12 +172,83 @@ struct
     def "_standalone_init" C.(int @-> ptr string @-> returning int)
       standalone_init
 
-  let regular (type t) (module T : Regular.S with type t = t) t name =
-    let def fn = def (name ^ "_" ^ fn) in
-    def "to_string" C.(t @-> returning OString.t) T.to_string;
-    def "compare" C.(t @-> t @-> returning int) T.compare;
-    def "equal"   C.(t @-> t @-> returning bool) T.equal;
-    def "hash"    C.(t @-> returning int) T.hash;
+
+  let fn = Foreign.funptr
+
+
+  module Regular = struct
+    let add (type t) (module T : Regular.S with type t = t)
+        {total=t} name =
+      let def fn = def (name ^ "_" ^ fn) in
+      def "to_string" C.(t @-> returning OString.t) T.to_string;
+      def "compare" C.(t @-> t @-> returning int) T.compare;
+      def "equal"   C.(t @-> t @-> returning bool) T.equal;
+      def "hash"    C.(t @-> returning int) T.hash
+  end
+
+  module Seq = struct
+    module Iter = struct
+      type 'a t = {
+        seq : 'a seq;
+        mutable pos : ('a * 'a seq) option;
+      }
+
+      let create seq = {seq; pos = Seq.next seq}
+      let value {pos} = Option.map ~f:fst pos
+      let has_next {pos} = Option.is_some pos
+      let reset iter = iter.pos <- Seq.next iter.seq
+      let next iter =
+        let res = value iter in
+        Option.iter iter.pos ~f:(fun (_,rest) ->
+            iter.pos <- Seq.next rest);
+        res
+
+    end
+
+    let apply hf seq f = hf seq ~f
+
+    let iterator name seq iter elt_opt =
+      let def fn = def (name ^ "_seq_iterator_" ^ fn) in
+      def "create" C.(seq @-> returning iter) Iter.create;
+      def "next" C.(iter @-> returning elt_opt) Iter.next;
+      def "value" C.(iter @-> returning elt_opt) Iter.value;
+      def "has_next" C.(iter @-> returning bool) Iter.has_next;
+      def "reset" C.(iter @-> returning void) Iter.reset
+
+    let add (type t) (module T : T with type t = t)
+        {total=elt; nullable=elt_opt} name =
+
+      let {total=seq} : t seq opaque = Opaque.newtype (name ^ "_seq_t") in
+      let {total=iter} :  t Iter.t opaque =
+        Opaque.newtype (name ^ "_seq_iterator_t") in
+      let def fn = def (name ^ "_seq_" ^ fn) in
+
+      def "length" C.(seq @-> returning int) Seq.length;
+      def "iter"
+        C.(seq @-> fn (elt @-> returning void) @-> returning void)
+        (apply Seq.iter);
+      def "map"
+        C.(seq @-> fn (elt @-> returning elt) @-> returning seq)
+        (apply Seq.map);
+      def "find"
+        C.(seq @-> fn (elt @-> returning bool) @-> returning elt_opt)
+        (apply Seq.find);
+      def "exists"
+        C.(seq @-> fn (elt @-> returning bool) @-> returning bool)
+        (apply Seq.exists);
+      def "forall"
+        C.(seq @-> fn (elt @-> returning bool) @-> returning bool)
+        (apply Seq.for_all);
+      def "count"
+        C.(seq @-> fn (elt @-> returning bool) @-> returning int)
+        (apply Seq.count);
+      def "append" C.(seq @-> seq @-> returning seq) Seq.append;
+      def "mem" C.(seq @-> elt @-> returning bool) Seq.mem;
+
+      iterator name seq iter elt_opt;
+
+      seq
+  end
 
   module Endian = struct
     module T = struct
@@ -198,7 +268,8 @@ struct
 
 
   module Arch = struct
-    let {total; nullable} : arch opaque = Opaque.newtype "arch_t"
+    let ({total=t; nullable=opt} as spec) : arch opaque =
+      Opaque.newtype "arch_t"
 
     let def name typ impl =
       def ("arch_" ^ name) typ impl
@@ -211,79 +282,106 @@ struct
       Array.findi_exn arches ~f:(fun i a -> Arch.equal a arch) |> fst
 
     let () =
-      regular (module Arch) total "arch";
+      Regular.add (module Arch) spec "arch";
       let bap_arch_tag = enum "bap_arch" sexp_of_arch Arch.all in
-      def "tag" C.(total @-> returning bap_arch_tag) get_tag;
-      def "create" C.(bap_arch_tag @-> returning total) (fun i -> arches.(i));
-      def "endian" C.(total @-> returning Endian.total) Arch.endian;
-      def "addr_size" C.(total @-> returning Size.Addr.total) Arch.addr_size;
-      def "of_string" C.(string @-> returning nullable) Arch.of_string;
+      def "tag" C.(t @-> returning bap_arch_tag) get_tag;
+      def "create" C.(bap_arch_tag @-> returning t) (fun i -> arches.(i));
+      def "endian" C.(t @-> returning Endian.total) Arch.endian;
+      def "addr_size" C.(t @-> returning Size.Addr.total) Arch.addr_size;
+      def "of_string" C.(string @-> returning opt) Arch.of_string;
       List.iter Arch.all ~f:(fun arch ->
           let name = Sexp.to_string (sexp_of_arch arch) in
-          def name C.(void @-> returning total) (fun () -> arch));
+          def name C.(void @-> returning t) (fun () -> arch));
   end
 
   module Tid = struct
-    let {total=t; nullable} : tid opaque = Opaque.newtype "tid_t"
+    let ({total=t; nullable=opt} as spec) : tid opaque =
+      Opaque.newtype "tid_t"
 
     let def x = def ("tid_" ^ x)
 
     let () =
-      regular (module Tid) t "tid";
+      Regular.add (module Tid) spec "tid";
       def "create" C.(void @-> returning t) Tid.create;
       def "set_name" C.(t @-> string @-> returning void) Tid.set_name;
       def "name" C.(t @-> returning OString.t) Tid.name;
-      def "from_string" C.(string @-> returning nullable)
+      def "from_string" C.(string @-> returning opt)
         (Error.lift1 Tid.from_string)
   end
 
-  module Term = struct
-    type enum =
-        Top | Sub | Arg | Blk | Def | Phi | Jmp
-    [@@deriving sexp, enumerate]
+  module Block = struct
+    let {total=t; nullable=opt} = Opaque.newtype "block_t"
+  end
 
-    let term_tag = enum "bap_term" sexp_of_enum all_of_enum
+  module Cfg = struct
+    let {total=t; nullable=opt} = Opaque.newtype "cfg_t"
+  end
+
+  (* module Term = struct *)
+  (*   type enum = *)
+  (*       Top | Sub | Arg | Blk | Def | Phi | Jmp *)
+  (*   [@@deriving sexp, enumerate] *)
+
+  (*   let term_tag = enum "bap_term" sexp_of_enum all_of_enum *)
 
 
-    let tag = Term.switch
-        ~program:(fun _ -> Top)
-        ~sub:(fun _ -> Sub)
-        ~arg:(fun _ -> Arg)
-        ~blk:(fun _ -> Blk)
-        ~phi:(fun _ -> Phi)
-        ~def:(fun _ -> Def)
-        ~jmp:(fun _ -> Jmp)
+  (*   let tag = Term.switch *)
+  (*       ~program:(fun _ -> Top) *)
+  (*       ~sub:(fun _ -> Sub) *)
+  (*       ~arg:(fun _ -> Arg) *)
+  (*       ~blk:(fun _ -> Blk) *)
+  (*       ~phi:(fun _ -> Phi) *)
+  (*       ~def:(fun _ -> Def) *)
+  (*       ~jmp:(fun _ -> Jmp) *)
 
-    let def ns name typ impl =
-      def ("term_" ^ ns ^ "_" ^ name) typ impl
+  (*   let def ns name typ impl = *)
+  (*     def ("term_" ^ ns ^ "_" ^ name) typ impl *)
 
-    let generic typ name =
-      let def fn = def name fn in
-      def "name" C.(typ @-> returning OString.t) Term.name;
-      def "clone" C.(typ @-> returning typ) Term.clone;
-      def "tid" C.(typ @-> returning Tid.t) Term.tid;
-      ()
+  (*   let generic typ name = *)
+  (*     let def fn = def name fn in (\* ??? *\) *)
+  (*     def "name" C.(typ @-> returning OString.t) Term.name; *)
+  (*     def "clone" C.(typ @-> returning typ) Term.clone; *)
+  (*     def "tid" C.(typ @-> returning Tid.t) Term.tid; *)
+  (*     () *)
 
-    let parent p name {total=t;nullable=t_opt} cls =
-      let def fn = def name fn in
-      def "length" C.(p @-> returning int) (Term.length cls);
-      def "find" C.(p @-> Tid.t @-> returning t_opt) (Term.find cls);
-      def "update" C.(p @-> t @-> returning p) (Term.update cls);
-      def "remove" C.(p @-> Tid.t @-> returning p) (Term.remove cls);
+  (*   let parent p name {total=t;nullable=t_opt} cls = *)
+  (*     let def fn = def name fn in *)
+  (*     def "length" C.(p @-> returning int) (Term.length cls); *)
+  (*     def "find" C.(p @-> Tid.t @-> returning t_opt) (Term.find cls); *)
+  (*     def "update" C.(p @-> t @-> returning p) (Term.update cls); *)
+  (*     def "remove" C.(p @-> Tid.t @-> returning p) (Term.remove cls); *)
 
-      let changecb_t = C.(t_opt @-> returning t_opt) in
+  (*     def "change" *)
+  (*       C.(p @-> Tid.t @-> fn (t_opt @-> returning t_opt) @-> returning p) *)
+  (*       (Term.change cls); *)
+  (* end *)
 
-      def "change"
-        C.(p @-> Tid.t @-> (Foreign.funptr changecb_t) @-> returning p)
-        (Term.change cls);
+  module Sub = struct
+    let {total=sub_t; nullable=sub_o} as t = Opaque.newtype "sub_t"
 
+    (*  XXX add is a bad word *)
+    let seq = Seq.add (module Sub) t "sub"
+
+    let () =
+      let def fn = def ("sub_" ^ fn) in
+      Regular.add (module Sub) t "sub";
+      def "lift"
+        C.(Block.t @-> Cfg.t @-> returning sub_t) Sub.lift;
+      def "name" C.(sub_t @-> returning OString.t) Sub.name;
+      def "with_name" C.(sub_t @-> string @-> returning sub_t)
+        Sub.with_name;
+      def "ssa" C.(sub_t @-> returning sub_t) Sub.ssa;
+      def "is_ssa" C.(sub_t @-> returning bool) Sub.is_ssa;
   end
 
   module Program = struct
-    let {total=t} : program term opaque = Opaque.newtype "program_t"
+    let ({total=t} as spec) : program term opaque = Opaque.newtype "program_t"
+
+    let def name typ = def ("program_" ^ name) typ
 
     let () =
-      regular (module Program) t "program"
+      Regular.add (module Program) spec "program";
+      def "subs" C.(t @-> returning Sub.seq) (Term.enum sub_t)
   end
 
   module Source = struct
@@ -303,8 +401,6 @@ struct
       let def fn x = def (name ^ "_factory_" ^ fn) x in
       def "find" C.(string @-> returning typ.nullable) Factory.find
   end
-
-
 
   module Rooter = struct
     let {total; nullable} : rooter opaque = Opaque.newtype "rooter_t"
@@ -365,32 +461,25 @@ struct
     end
 
     let create input params =
-      let getf fld =
+      let (!!) fld =
         if C.is_null params then None
         else C.getf C.(!@params) fld in
-      let disassembler,
-          brancher,
-          symbolizer,
-          rooter,
-          reconstructor =
-        getf disassembler_p,
-        getf brancher_p,
-        getf symbolizer_p,
-        getf rooter_p,
-        getf reconstructor_p in
-      Project.create ?disassembler ?brancher ?symbolizer ?rooter
-        ?reconstructor input
-
+      Project.create
+        ?disassembler:!!disassembler_p
+        ?brancher:!!brancher_p
+        ?symbolizer:!!symbolizer_p
+        ?rooter:!!rooter_p
+        ?reconstructor:!!reconstructor_p
+        input
 
     let () =
       def "create" C.(Input.t @-> ptr params @-> returning nullable)
         (Error.lift2 create);
 
-      def "arch" C.(project_t @-> returning Arch.total)
+      def "arch" C.(project_t @-> returning Arch.t)
         Project.arch;
 
       def "program" C.(project_t @-> returning Program.t)
-        Project.program
-
+        Project.program;
   end
 end

@@ -10,6 +10,19 @@ int two() {return 2;}
 int bap_standalone_init(int, const char **);
 
 
+void print_sub_names(bap_sub_seq_t *subs) {
+    bap_sub_seq_iterator_t *iter = bap_sub_seq_iterator_create(subs);
+    while (bap_sub_seq_iterator_has_next(iter)) {
+        bap_sub_t *sub = bap_sub_seq_iterator_next(iter);
+        char *name = bap_sub_name(sub);
+        printf("%s\n", name);
+        bap_free(sub);
+        bap_free(name);
+    }
+    bap_free(iter);
+}
+
+
 int main(int argc, const char **argv) {
     int res = bap_standalone_init(argc, argv);
     if (res < 0) {
@@ -42,6 +55,11 @@ int main(int argc, const char **argv) {
 
     bap_program_t *prog = bap_project_program(proj);
     printf("Program:\n%s\n", bap_program_to_string(prog));
+
+    bap_sub_seq_t *subs = bap_program_subs(prog);
+    print_sub_names(subs);
+
+    printf("That's all folks\n"); fflush(stdout);
 
     bap_free(arch);
     bap_free(proj);
