@@ -19,8 +19,15 @@ int main(int argc, const char **argv) {
 
     printf("BAP.%s was succesfully initialized\n", bap_version());
 
-    bap_project_t *proj =
-        bap_project_create(bap_project_input_file("/bin/true", NULL));
+    struct bap_project_parameters_t params = {0};
+    params.bap_project_rooter = bap_rooter_factory_find("byteweight");
+
+    if (params.bap_project_rooter == NULL) {
+        printf("Warning: byteweight is not installed\n");
+    }
+
+    bap_project_input_t * input = bap_project_input_file("/bin/true", NULL);
+    bap_project_t *proj = bap_project_create(input, &params);
 
     if (!proj) {
         printf("failed to create a project: %s\n", bap_error_get());
@@ -32,12 +39,12 @@ int main(int argc, const char **argv) {
     char *name = bap_arch_to_string(arch);
 
     printf("Architecture: %s\n", name);
-    printf("String %s(%p) is managed by OCaml\n", name, name);
-    printf("and has length %d == %d\n", bap_strlen(name), (int) strlen(name));
+
+    bap_program_t *prog = bap_project_program(proj);
+    printf("Program:\n%s\n", bap_program_to_string(prog));
 
     bap_free(arch);
     bap_free(proj);
     bap_free(name);
-
     return 0;
 }
