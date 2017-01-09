@@ -1,6 +1,6 @@
 BUILDDIR=../_build/test
 $(shell mkdir -p $(BUILDDIR))
-OCAMLDIR=$(shell ocamlopt -where)
+OCAMLDIR=$(shell ocamlfind ocamlc -where)
 
 CC:= $(shell ocamlfind ocamlc -config | awk '/^bytecomp_c_compiler/ {for(i=2;i<=NF;i++) printf "%s " ,$$i}')
 LD=$(CC)

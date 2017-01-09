@@ -4,13 +4,15 @@ OCAMLDIR=$(shell ocamlopt -where)
 $(shell mkdir -p $(BUILDDIR) $(BUILDDIR)/stub $(BUILDDIR)/lib $(BUILDDIR)/stub_generator $(BUILDDIR)/test $(BUILDDIR)/generated)
 PACKAGES=bap,bap.plugins,ctypes.stubs,ctypes.foreign,findlib.dynload
 
+BINDINGS=$(BUILDDIR)/lib/bindings.cmx
+
 # The files used to build the stub generator.
-GENERATOR_FILES=$(BUILDDIR)/lib/bindings.cmx		\
+GENERATOR_FILES=$(BINDINGS)				\
                 $(BUILDDIR)/stub_generator/generate.cmx
 
 # The files from which we'll build a shared library.
-LIBFILES=$(BUILDDIR)/lib/bindings.cmx			\
-         $(BUILDDIR)/generated/bap_bindings.cmx	\
+LIBFILES=$(BINDINGS)					\
+         $(BUILDDIR)/generated/bap_bindings.cmx	 	\
          $(BUILDDIR)/lib/apply_bindings.cmx		\
          $(BUILDDIR)/generated/bap.o
 
