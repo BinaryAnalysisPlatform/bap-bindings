@@ -360,10 +360,14 @@ struct
 
   module Endian = struct
     module T = struct
-      type t = Word.endian
+      type t = Word.endian =
+        | LittleEndian
+        | BigEndian
+      [@@deriving compare, enumerate, sexp]
     end
-
-    let t : endian opaque = Opaque.newtype "endian"
+    let enum = Enum.define (module T) "endian"
+    let t = Enum.total enum
+    let partial = Enum.partial enum
   end
 
   (* small positive int *)
@@ -402,7 +406,7 @@ struct
 
     let () =
       let def fn = def ("arch_" ^ fn) in
-      def "endian" C.(total @-> returning !!Endian.t) Arch.endian;
+      def "endian" C.(total @-> returning Endian.t) Arch.endian;
       def "addr_size" C.(total @-> returning Size.t) size ;
       def "to_string" C.(total @-> returning OString.t) Arch.to_string ;
       def "of_string" C.(string @-> returning partial) Arch.of_string;
@@ -572,12 +576,14 @@ struct
       | Bil.Int x -> Some x
       | _ -> None
 
+    let make_load mem addr endian size = ()
+
     let () =
       let proj p = C.(!!t @-> returning !?p) in
       def "tag" C.(!!t @-> returning tag_t) to_tag;
       def "mem" (proj t) mem;
       def "addr" (proj t) addr;
-      def "endian" (proj Endian.t) endian;
+      def "endian" C.(!!t @-> returning Endian.partial) endian;
       def "size" C.(!!t @-> returning Size.partial) size;
       def "exp" (proj t) exp;
       def "var" (proj Var.t) var;
