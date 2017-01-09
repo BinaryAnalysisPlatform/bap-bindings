@@ -686,6 +686,14 @@ struct
       | Bil.Int x -> Some x
       | _ -> None
 
+    let unknown_msg = function
+      | Bil.Unknown (x,_) -> x
+      | _ -> ""
+
+    let unknown_type = function
+      | Bil.Unknown (_,x) -> Some x
+      | _ -> None
+
     let create_load mem addr endian size =
       Bil.load ~mem ~addr endian size
 
@@ -716,6 +724,8 @@ struct
       def "create_load"
         C.(!!t @-> !!t @-> Endian.t @-> Size.t @-> returning !!t)
         create_load;
+      def "unknown_msg" C.(!!t @-> returning OString.t) unknown_msg;
+      def "unknown_typ" C.(!!t @-> returning !?Type.t) unknown_type;
       def "create_store"
         C.(!!t @-> !!t @-> !!t @-> Endian.t @-> Size.t @-> returning !!t)
         create_store;
@@ -727,6 +737,12 @@ struct
       def "create_int" C.(!!Word.t @-> returning !!t) Bil.int;
       def "create_cast" C.(cast_t @-> int @-> !!t @-> returning !!t) Bil.cast;
       def "create_let" C.(!!Var.t @-> !!t @-> !!t @-> returning !!t) Bil.let_;
+      def "create_unknown" C.(string @-> !!Type.t @-> returning !!t) Bil.unknown;
+      def "create_ite" C.(!!t @-> !!t @-> !!t @-> returning !!t)
+        (fun if_ then_ else_ -> Bil.ite ~if_ ~then_ ~else_);
+      def "create_extract" C.(int @-> int @-> !!t @-> returning !!t)
+        (fun lo hi x -> Bil.extract ~lo ~hi x);
+      def "create_concat" C.(!!t @-> !!t @-> returning !!t) Bil.concat;
       ()
   end
 
@@ -794,6 +810,12 @@ struct
       def "false_stmts" C.(!!t @-> returning !?seq) false_stmts;
       def "cpuexn" C.(!!t @-> returning Unsigned.partial) cpuexn;
       def "jmp" C.(!!t @-> returning !?Exp.t) jmp;
+      def "create_move" C.(!!Var.t @-> !!Exp.t @-> returning !!t) Bil.move;
+      def "create_jmp" C.(!!Exp.t @-> returning !!t) Bil.jmp;
+      def "create_special" C.(string @-> returning !!t) Bil.special;
+      def "create_if" C.(!!Exp.t @-> !!seq @-> !!seq @-> returning !!t)
+        (fun exp xs ys -> Bil.if_ exp (Seq.ML.to_list xs) (Seq.ML.to_list ys));
+      def "create_cpuexn" C.(int @-> returning !!t) Bil.cpuexn;
   end
 
   module Tid = struct
