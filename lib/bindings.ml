@@ -13,16 +13,57 @@ module Make( Internal : Cstubs_inverted.INTERNAL) =
 struct
   module C = Ctypes
 
-  let enum ?(first=0) name sexp cases =
-    let pref = String.uppercase name in
-    let t =
-      C.view ~format_typ:(fun k ppf -> fprintf ppf "enum %s_tag%t" name k)
-        ~read:ident ~write:ident C.int in
-    let cases = List.mapi cases ~f:(fun i x ->
-        let name = String.uppercase (Sexp.to_string (sexp x)) in
-        pref ^ "_" ^ name, Int64.of_int (first + i)) in
-    Internal.enum cases t;
-    t
+  module Enum : sig
+    module type T = sig
+      type t [@@deriving enumerate, compare, sexp]
+    end
+    type 'a t
+    val define : ?first:int -> (module T with type t = 'a) -> string -> 'a t
+    val total : 'a t -> 'a C.typ
+    val partial : 'a t -> 'a option C.typ
+
+  end = struct
+    module type T = sig
+      type t [@@deriving enumerate, compare, sexp]
+    end
+
+    type 'a t = {
+      total : 'a C.typ;
+      partial : 'a option C.typ;
+    }
+
+    let define ?(first=0) (type t) (module E: T with type t = t) name =
+      assert (first >= 0);
+      let enum = Array.of_list E.all in
+      Array.sort enum ~cmp:E.compare;
+      let read i = Array.get enum (i - first) in
+      let write t =
+        match
+          Array.binary_search ~compare:E.compare enum `First_equal_to t
+        with None -> assert false
+           | Some x -> x + first in
+      let read_opt i = if i = -1  then None else Some (read i) in
+      let write_opt = function
+        | None -> -1
+        | Some x -> write x in
+      let pref = String.uppercase name in
+      let view read write =
+        C.view ~format_typ:(fun k ppf -> fprintf ppf "enum %s_tag%t" name k)
+          ~read ~write C.int in
+      let cases = List.mapi E.all ~f:(fun i x ->
+          let name = String.uppercase (Sexp.to_string (E.sexp_of_t x)) in
+          pref ^ "_" ^ name, Int64.of_int (first + i)) in
+      let cases = (pref ^ "_INVALID", Int64.of_int (~-1)) :: cases in
+      let t = view read write in
+      let partial = view read_opt write_opt in
+      Internal.enum cases t;
+      Internal.typedef t (name ^ "_tag");
+      {total = t; partial}
+
+    let total t = t.total
+    let partial t = t.partial
+  end
+
 
   let def name = Internal.internal ("bap_" ^ name)
 
@@ -209,19 +250,6 @@ struct
 
   let fn = Foreign.funptr
 
-
-  module Regular = struct
-    module ML = Regular
-    let instance (type t) (module T : Regular.S with type t = t) t =
-      let name = Opaque.name t in
-      let def fn = def (name ^ "_" ^ fn) in
-      let t = Opaque.total t in
-      def "to_string" C.(t @-> returning OString.t) T.to_string;
-      def "compare" C.(t @-> t @-> returning int) T.compare;
-      def "equal"   C.(t @-> t @-> returning bool) T.equal;
-      def "hash"    C.(t @-> returning int) T.hash
-  end
-
   module Seq = struct
     module ML = Seq
     module Iter = struct
@@ -297,6 +325,39 @@ struct
       seq
   end
 
+
+  module Regular = struct
+    module ML = Regular
+    let instance (type t) (module T : Regular.S with type t = t) t =
+      let name = Opaque.name t in
+      let def fn = def (name ^ "_" ^ fn) in
+      let t = Opaque.total t in
+      def "to_string" C.(t @-> returning OString.t) T.to_string;
+      def "compare" C.(t @-> t @-> returning int) T.compare;
+      def "equal"   C.(t @-> t @-> returning bool) T.equal;
+      def "hash"    C.(t @-> returning int) T.hash
+
+
+    module Make(Spec : sig
+        type t
+        val name : string
+        module T : Regular.S with type t = t
+      end) = struct
+      open Spec
+
+      let t = Opaque.newtype name
+      let seq = Seq.instance (module T) t
+
+      let def fn typ impl =
+        def (name ^ "_" ^ fn) typ impl
+
+      let () =
+        instance (module T) t;
+    end
+
+  end
+
+
   module Endian = struct
     module T = struct
       type t = Word.endian
@@ -305,38 +366,236 @@ struct
     let t : endian opaque = Opaque.newtype "endian"
   end
 
+  (* small positive int *)
+  module Unsigned = struct
+    let t = C.int
+    let partial = C.view t
+        ~read:(fun x -> Option.some_if (x >= 0) x)
+        ~write:(function None -> -1 | Some x -> x)
+  end
+
   module Size = struct
-    let t : size opaque = Opaque.newtype "size"
-    module Addr = struct
-      let t : addr_size opaque = Opaque.newtype "addr_size"
-    end
+    module T = Size
+    let t = C.view C.int ~read:Size.of_int_exn ~write:Size.in_bits
+    let partial = C.view C.int
+        ~read:Size.of_int_opt
+        ~write:(function
+            | None -> -1
+            | Some x -> Size.in_bits x)
+  end
+
+  module Word = struct
+    include Regular.Make(struct
+        type t = word
+        let name = "word"
+        module T = Word
+      end)
   end
 
 
   module Arch = struct
-    let t : arch opaque = Opaque.newtype "arch"
+    let t = Enum.define (module Arch) "bap_arch"
+    let total = Enum.total t
+    let partial = Enum.partial t
 
-    let def name typ impl =
-      def ("arch_" ^ name) typ impl
-
-    let name arch = Sexp.to_string (sexp_of_arch arch)
-
-    let arches = Array.of_list Arch.all
-
-    let get_tag arch =
-      Array.findi_exn arches ~f:(fun i a -> Arch.equal a arch) |> fst
+    let size arch = (Arch.addr_size arch :> Size.T.all)
 
     let () =
-      Regular.instance (module Arch) t;
-      let bap_arch_tag = enum "bap_arch" sexp_of_arch Arch.all in
-      def "tag" C.(!!t @-> returning bap_arch_tag) get_tag;
-      def "create" C.(bap_arch_tag @-> returning !!t) (fun i -> arches.(i));
-      def "endian" C.(!!t @-> returning !!Endian.t) Arch.endian;
-      def "addr_size" C.(!!t @-> returning !!Size.Addr.t) Arch.addr_size;
-      def "of_string" C.(string @-> returning !?t) Arch.of_string;
-      List.iter Arch.all ~f:(fun arch ->
-          let name = Sexp.to_string (sexp_of_arch arch) in
-          def name C.(void @-> returning !!t) (fun () -> arch));
+      let def fn = def ("arch_" ^ fn) in
+      def "endian" C.(total @-> returning !!Endian.t) Arch.endian;
+      def "addr_size" C.(total @-> returning Size.t) size ;
+      def "to_string" C.(total @-> returning OString.t) Arch.to_string ;
+      def "of_string" C.(string @-> returning partial) Arch.of_string;
+  end
+
+  module Var = struct
+    include Regular.Make(struct
+        type t = var
+        let name = "var"
+        module T = Var
+      end)
+  end
+
+  module Exp = struct
+    include Regular.Make(struct
+        type t = exp
+        let name = "exp"
+        module T = Exp
+      end)
+
+    module Tag = struct
+      type t = [
+        | `Load | `Store | `BinOp | `UnOp | `Var | `Int
+        | `Cast | `Let | `Unknown | `Ite | `Extract | `Concat
+      ] [@@deriving sexp, enumerate, compare]
+    end
+
+    (* XXX: the following will be removed after we will
+       add enumerate to corresponding definitions in bap.mli *)
+
+    module Cast = struct
+      type t = Bil.cast =
+        | UNSIGNED
+        | SIGNED
+        | HIGH
+        | LOW
+      [@@deriving enumerate, compare, sexp]
+    end
+
+    module Binop = struct
+      type t = Bil.binop =
+        | PLUS
+        | MINUS
+        | TIMES
+        | DIVIDE
+        | SDIVIDE
+        | MOD
+        | SMOD
+        | LSHIFT
+        | RSHIFT
+        | ARSHIFT
+        | AND
+        | OR
+        | XOR
+        | EQ
+        | NEQ
+        | LT
+        | LE
+        | SLT
+        | SLE
+      [@@deriving enumerate, compare, sexp]
+    end
+
+    module Unop = struct
+      type t = Bil.unop =
+        | NEG
+        | NOT
+      [@@deriving enumerate, compare, sexp]
+    end
+
+    let tag = Enum.define (module Tag) "exp"
+    let cast = Enum.define (module Cast) "cast"
+    let binop = Enum.define (module Binop) "binop"
+    let unop = Enum.define (module Unop) "unop"
+
+    let decompose t = Enum.total t, Enum.partial t
+
+    let tag_t,tag_p = decompose tag
+    let cast_t,cast_p = decompose cast
+    let binop_t,binop_p = decompose binop
+    let unop_t,unop_p = decompose unop
+
+    let to_tag = function
+      | Bil.Load _ -> `Load
+      | Bil.Store _ -> `Store
+      | Bil.BinOp _ -> `BinOp
+      | Bil.UnOp _ -> `UnOp
+      | Bil.Var _ -> `Var
+      | Bil.Int _ -> `Int
+      | Bil.Cast _ -> `Cast
+      | Bil.Let _ -> `Let
+      | Bil.Unknown _ -> `Unknown
+      | Bil.Ite _ -> `Ite
+      | Bil.Extract _ -> `Extract
+      | Bil.Concat _ -> `Concat
+
+    let mem = function
+      | Bil.Load (mem,_,_,_)
+      | Bil.Store (mem,_,_,_,_) -> Some mem
+      | _ -> None
+
+    let addr = function
+      | Bil.Load (_,x,_,_)
+      | Bil.Store (_,x,_,_,_) -> Some x
+      | _ -> None
+
+    let endian = function
+      | Bil.Load (_,_,x,_)
+      | Bil.Store (_,_,_,x,_) -> Some x
+      | _ -> None
+
+    let size = function
+      | Bil.Load (_,_,_,x)
+      | Bil.Store (_,_,_,_,x) -> Some x
+      | _ -> None
+
+    let exp = function
+      | Bil.UnOp (_,x)
+      | Bil.Cast (_,_,x)
+      | Bil.Let (_,_,x)
+      | Bil.Extract (_,_,x) -> Some x
+      | _ -> None
+
+    let var = function
+      | Bil.Var x | Bil.Let (x,_,_) -> Some x
+      | _ -> None
+
+    let lhs = function
+      | Bil.BinOp (_,x,_)
+      | Bil.Ite (_,x,_)
+      | Bil.Concat (x,_) -> Some x
+      | _ -> None
+
+    let rhs = function
+      | Bil.BinOp (_,_,x)
+      | Bil.Ite (_,_,x)
+      | Bil.Concat (_,x)
+      | Bil.Let (_,x,_)
+      | Bil.Store (_,_,x,_,_) -> Some x
+      | _ -> None
+
+    let unop = function
+      | Bil.UnOp (op,_) -> Some op
+      | _ -> None
+
+    let binop = function
+      | Bil.BinOp (op,_,_) -> Some op
+      | _ -> None
+
+    let cast = function
+      | Bil.Cast (ct,_,_) -> Some ct
+      | _ -> None
+
+    let cast_size = function
+      | Bil.Cast (_,x,_) -> Some x
+      | _ -> None
+
+    let extract_lobit = function
+      | Bil.Extract (x,_,_) -> Some x
+      | _ -> None
+
+    let extract_hibit = function
+      | Bil.Extract (_,x,_) -> Some x
+      | _ -> None
+
+    let value = function
+      | Bil.Int x -> Some x
+      | _ -> None
+
+    let () =
+      let proj p = C.(!!t @-> returning !?p) in
+      def "tag" C.(!!t @-> returning tag_t) to_tag;
+      def "mem" (proj t) mem;
+      def "addr" (proj t) addr;
+      def "endian" (proj Endian.t) endian;
+      def "size" C.(!!t @-> returning Size.partial) size;
+      def "exp" (proj t) exp;
+      def "var" (proj Var.t) var;
+      def "lhs" (proj t) lhs;
+      def "rhs" (proj t) rhs;
+      def "unop" C.(!!t @-> returning unop_p) unop;
+      def "binop" C.(!!t @-> returning binop_p) binop;
+      def "cast" C.(!!t @-> returning cast_p) cast;
+      def "value"  (proj Word.t) value;
+      def "cast_size" C.(!!t @-> returning Unsigned.partial) cast_size;
+      def "extract_hibit"
+        C.(!!t @-> returning Unsigned.partial) extract_hibit;
+      def "extract_lobit"
+        C.(!!t @-> returning Unsigned.partial) extract_lobit;
+
+      ()
+
+
   end
 
   module Tid = struct
@@ -366,7 +625,6 @@ struct
         Top | Sub | Arg | Blk | Def | Phi | Jmp
     [@@deriving sexp, enumerate]
 
-    let term_tag = enum "bap_term" sexp_of_enum all_of_enum
 
 
     let tag = Term.switch
@@ -382,6 +640,7 @@ struct
     type void = Void
 
     let t : void term opaque = Opaque.newtype "term"
+    let term = t
 
     let () =
       let def fn = def ("term_" ^ fn) in
@@ -429,30 +688,35 @@ struct
       def "before_rev" C.(!!t @-> !!Tid.t @-> returning !!seq)
         (Term.before cls ~rev:true);
       ()
+
+
+    module Make(Spec : sig
+        type t
+        type p
+        val name : string
+        val cls : (p,t) cls
+        module T : Regular.ML.S with type t = t term
+      end) = struct
+      open Spec
+
+      let t = Opaque.newtype name
+      let seq = Seq.instance (module T) t
+
+      let def fn typ impl =
+        def (name ^ "_" ^ fn) typ impl
+
+      let () =
+        Opaque.instanceof ~base:term t;
+        Regular.instance (module T) t;
+    end
+
   end
 
-  module MakeTerm(Spec : sig
-      type t
-      type p
-      val name : string
-      val cls : (p,t) cls
-      module T : Regular.ML.S with type t = t term
-    end) = struct
-    open Spec
 
-    let t = Opaque.newtype name
-    let seq = Seq.instance (module T) t
 
-    let def fn typ impl =
-      def (name ^ "_" ^ fn) typ impl
-
-    let () =
-      Opaque.instanceof ~base:Term.t t;
-      Regular.instance (module T) t;
-  end
 
   module Jmp = struct
-    include MakeTerm(struct
+    include Term.Make(struct
         type t = jmp and p = blk
         let name = "jmp" and cls = jmp_t
         module T = Jmp
@@ -460,7 +724,7 @@ struct
   end
 
   module Def = struct
-    include MakeTerm(struct
+    include Term.Make(struct
         type t = def and p = blk
         let name = "def" and cls = def_t
         module T = Def
@@ -468,7 +732,7 @@ struct
   end
 
   module Phi = struct
-    include MakeTerm(struct
+    include Term.Make(struct
         type t = phi and p = blk
         let name = "phi" and cls = phi_t
         module T = Phi
@@ -476,7 +740,7 @@ struct
   end
 
   module Blk = struct
-    include MakeTerm(struct
+    include Term.Make(struct
         type t = blk and p = sub
         let name = "blk" and cls = blk_t
         module T = Blk
@@ -489,7 +753,7 @@ struct
   end
 
   module Arg = struct
-    include MakeTerm(struct
+    include Term.Make(struct
         type t = arg and p = sub
         let name = "arg" and cls = arg_t
         module T = Arg
@@ -498,7 +762,7 @@ struct
   end
 
   module Sub = struct
-    include MakeTerm(struct
+    include Term.Make(struct
         type t = sub and p = program
         let name = "sub" and cls = sub_t
         module T = Sub
@@ -613,7 +877,7 @@ struct
       def "create" C.(!!Input.t @-> ptr params @-> returning !?t)
         (Error.lift2 create);
 
-      def "arch" C.(proj_t @-> returning !!Arch.t)
+      def "arch" C.(proj_t @-> returning Arch.total)
         Project.arch;
 
       def "program" C.(proj_t @-> returning !!Program.t)

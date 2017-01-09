@@ -50,7 +50,7 @@ int main(int argc, const char **argv) {
     }
     printf("created a project\n");
 
-    bap_arch_t *arch = bap_project_arch(proj);
+    bap_arch_tag arch = bap_project_arch(proj);
     char *name = bap_arch_to_string(arch);
 
     printf("Architecture: %s\n", name);
@@ -63,7 +63,6 @@ int main(int argc, const char **argv) {
 
     printf("That's all folks\n"); fflush(stdout);
 
-    bap_free(arch);
     bap_free(proj);
     bap_free(name);
     return 0;
