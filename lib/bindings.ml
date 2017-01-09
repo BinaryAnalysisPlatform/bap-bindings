@@ -412,12 +412,73 @@ struct
       def "of_string" C.(string @-> returning partial) Arch.of_string;
   end
 
+  module Type = struct
+    include Regular.Make(struct
+        type t = Type.t
+        let name = "type"
+        module T = Type
+      end)
+    module Tag = struct
+      type t = [`Imm | `Mem] [@@deriving enumerate, sexp, compare]
+    end
+
+    let enum = Enum.define (module Tag) "type"
+    let tag_t = Enum.total enum
+
+
+    let to_tag = function
+      | Type.Imm _ -> `Imm
+      | Type.Mem _ -> `Mem
+
+    let imm_size = function
+      | Type.Imm x -> Some x
+      | _ -> None
+
+    let addr_size = function
+      | Type.Mem (x,_) -> Some (Size.T.in_bits x)
+      | _ -> None
+
+    let value_size = function
+      | Type.Mem (_,x) -> Some (Size.T.in_bits x)
+      | _ -> None
+
+    let make_mem addr_size size =
+      let open Option in
+      Size.T.addr_of_int_opt addr_size >>= fun addr_size ->
+      Size.T.of_int_opt size >>| fun size ->
+      Type.Mem (addr_size, size)
+
+    let make_imm n = Type.Imm n
+
+
+    let () =
+      def "tag" C.(!!t @-> returning tag_t) to_tag;
+      def "imm_size" C.(!!t @-> returning Unsigned.partial) imm_size;
+      def "addr_size" C.(!!t @-> returning Unsigned.partial) addr_size;
+      def "value_size" C.(!!t @-> returning Unsigned.partial) value_size;
+      def "create_mem" C.(int @-> int @-> returning !?t) make_mem;
+      def "create_imm" C.(int @-> returning !!t) make_imm;
+  end
+
   module Var = struct
     include Regular.Make(struct
         type t = var
         let name = "var"
         module T = Var
       end)
+
+    let () =
+      def "name" C.(!!t @-> returning OString.t) Var.name;
+      def "type" C.(!!t @-> returning !!Type.t) Var.typ;
+      def "is_physical" C.(!!t @-> returning bool) Var.is_physical;
+      def "is_virtual" C.(!!t @-> returning bool) Var.is_virtual;
+      def "base" C.(!!t @-> returning !!t) Var.base;
+      def "same" C.(!!t @-> !!t @-> returning bool) Var.same;
+      def "index" C.(!!t @-> returning int) Var.index;
+      def "with_index" C.(!!t @-> int @-> returning !!t) Var.with_index;
+      def "create" C.(string @-> !!Type.t @-> bool @-> bool @-> returning !!t)
+        (fun name typ is_virtual fresh ->
+           Var.create ~is_virtual ~fresh name typ)
   end
 
   module Exp = struct
@@ -576,7 +637,12 @@ struct
       | Bil.Int x -> Some x
       | _ -> None
 
-    let make_load mem addr endian size = ()
+    let create_load mem addr endian size =
+      Bil.load ~mem ~addr endian size
+
+    let create_store mem addr exp endian size =
+      Bil.store ~mem ~addr exp endian size
+
 
     let () =
       let proj p = C.(!!t @-> returning !?p) in
@@ -598,7 +664,20 @@ struct
         C.(!!t @-> returning Unsigned.partial) extract_hibit;
       def "extract_lobit"
         C.(!!t @-> returning Unsigned.partial) extract_lobit;
-
+      def "create_load"
+        C.(!!t @-> !!t @-> Endian.t @-> Size.t @-> returning !!t)
+        create_load;
+      def "create_store"
+        C.(!!t @-> !!t @-> !!t @-> Endian.t @-> Size.t @-> returning !!t)
+        create_store;
+      def "create_binop"
+        C.(binop_t @-> !!t @-> !!t @-> returning !!t) Bil.binop;
+      def "create_unop"
+        C.(unop_t @-> !!t @-> returning !!t) Bil.unop;
+      def "create_var" C.(!!Var.t @-> returning !!t) Bil.var;
+      def "create_int" C.(!!Word.t @-> returning !!t) Bil.int;
+      def "create_cast" C.(cast_t @-> int @-> !!t @-> returning !!t) Bil.cast;
+      def "create_let" C.(!!Var.t @-> !!t @-> !!t @-> returning !!t) Bil.let_;
       ()
   end
 
