@@ -594,8 +594,72 @@ struct
         C.(!!t @-> returning Unsigned.partial) extract_lobit;
 
       ()
+  end
 
+  module Stmt = struct
+    include Regular.Make(struct
+        type t = stmt
+        let name = "stmt"
+        module T = Stmt
+      end)
 
+    module Tag = struct
+      type t =
+        [`Move | `Jmp | `Special | `While | `If | `CpuExn]
+      [@@deriving compare, sexp, enumerate]
+    end
+
+    let tag = Enum.define (module Tag) "stmt"
+    let tag_t = Enum.total tag
+
+    let to_tag = function
+      | Bil.Move _ -> `Move
+      | Bil.Jmp _ -> `Jmp
+      | Bil.Special _ -> `Special
+      | Bil.While (_,_) -> `While
+      | Bil.If (_,_,_) -> `If
+      | Bil.CpuExn _ -> `CpuExn
+
+    let exp = function
+      | Bil.Move (_,x)
+      | Bil.Jmp x
+      | Bil.While (x,_)
+      | Bil.If (x,_,_) -> Some x
+      | _ -> None
+
+    let var = function
+      | Bil.Move (x,_) -> Some x
+      | _ -> None
+
+    let stmts = function
+      | Bil.While (_,x) -> Some (Seq.ML.of_list x)
+      | _ -> None
+
+    let true_stmts = function
+      | Bil.If (_,x,_) -> Some (Seq.ML.of_list x)
+      | _ -> None
+
+    let false_stmts = function
+      | Bil.If (_,_,x) -> Some (Seq.ML.of_list x)
+      | _ -> None
+
+    let cpuexn = function
+      | Bil.CpuExn n -> Some n
+      | _ -> None
+
+    let jmp = function
+      | Bil.Jmp x -> Some x
+      | _ -> None
+
+    let () =
+      def "tag" C.(!!t @-> returning tag_t) to_tag;
+      def "exp" C.(!!t @-> returning !?Exp.t) exp;
+      def "var" C.(!!t @-> returning !?Var.t) var;
+      def "stmts" C.(!!t @-> returning !?seq) stmts;
+      def "true_stmts" C.(!!t @-> returning !?seq) true_stmts;
+      def "false_stmts" C.(!!t @-> returning !?seq) false_stmts;
+      def "cpuexn" C.(!!t @-> returning Unsigned.partial) cpuexn;
+      def "jmp" C.(!!t @-> returning !?Exp.t) jmp;
   end
 
   module Tid = struct
