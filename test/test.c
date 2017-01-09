@@ -15,9 +15,11 @@ void print_sub_names(bap_sub_seq_t *subs) {
     while (bap_sub_seq_iterator_has_next(iter)) {
         bap_sub_t *sub = bap_sub_seq_iterator_next(iter);
         char *name = bap_sub_name(sub);
-        printf("%s\n", name);
+        char *tnam = bap_term_name(sub);
+        printf("%s: %s\n", name, tnam);
         bap_free(sub);
         bap_free(name);
+        bap_free(tnam);
     }
     bap_free(iter);
 }
