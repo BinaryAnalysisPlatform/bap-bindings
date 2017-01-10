@@ -3,6 +3,8 @@ open Bap.Std
 open Regular.Std
 open Bap_plugins.Std
 open Format
+module C = Ctypes
+
 
 include Self()
 
@@ -13,8 +15,6 @@ let name = None
 
 module Make( Internal : Cstubs_inverted.INTERNAL) =
 struct
-  module C = Ctypes
-
   module Enum : sig
     module type T = sig
       type t [@@deriving enumerate, compare, sexp]
@@ -48,7 +48,7 @@ struct
       let write_opt = function
         | None -> -1
         | Some x -> write x in
-      let pref = String.uppercase name in
+      let pref = String.uppercase ("bap_" ^ name) in
       let view read write =
         C.view ~format_typ:(fun k ppf -> fprintf ppf "enum %s_tag%t" name k)
           ~read ~write C.int in
@@ -86,7 +86,7 @@ struct
     let str_of_ptr ptr = C.string_of (C.ptr C.void) (C.to_voidp ptr)
 
     let expect_managed ptr =
-      invalid_argf "Object at %s is not managed by ocaml"
+      invalid_argf "Object at %s is not managed by OCaml"
         (str_of_ptr ptr) ()
 
     let size ptr =
@@ -99,7 +99,6 @@ struct
       | None -> expect_managed ptr
       | Some arr ->
         String.init (Array.length arr) ~f:(Array.get arr)
-
 
     let write str =
       let len = String.length str + 1 in
@@ -114,9 +113,19 @@ struct
       Hashtbl.set managed ~key:(addr ptr) ~data:arr;
       ptr
 
+    let read_opt ptr =
+      if C.is_null ptr then None else Some (read ptr)
+    let write_opt = function
+      | None -> C.from_voidp C.char C.null
+      | Some str -> write str
+
     let () = def "strlen" C.(ptr char @-> returning int) size
 
     let t : string C.typ = C.view ~read ~write (C.ptr C.char)
+    let nullable : string option C.typ =
+      C.view (C.ptr C.char) ~read:read_opt ~write:write_opt
+
+    let spec = (t,nullable)
   end
 
   module Opaque : sig
@@ -353,7 +362,7 @@ struct
       let iter :  t Iter.t opaque = Opaque.newtype (name ^ "_seq_iterator") in
       let def fn = def (name ^ "_seq_" ^ fn) in
       let mapper = fn C.(!!elt @-> ptr void @-> returning !!elt) in
-      Internal.typedef mapper (name ^ "seq__mapper");
+      Internal.typedef mapper (name ^ "_seq_mapper");
       Opaque.instanceof ~base:t seq;
       Container.instance (module Seq0) seq elt;
       iterator name seq iter elt;
@@ -404,7 +413,6 @@ struct
            ptr void @-> returning void)
         (fun set f data -> Hash_set.filter_inplace set ~f:(fun x -> f x data));
       t
-
   end
 
   module Regular = struct
@@ -418,12 +426,21 @@ struct
       def "equal"   C.(t @-> t @-> returning bool) T.equal;
       def "hash"    C.(t @-> returning int) T.hash
 
+
+
     module Make(Spec : sig
-        type t
         val name : string
-        module T : Regular.S with type t = t
+        module T : Regular.S
       end) = struct
       open Spec
+
+      let set_of_pset pset =
+        let set = T.Hash_set.create () in
+        T.Set.iter pset ~f:(Hash_set.add set);
+        set
+
+      let pset_of_set =
+        Hash_set.fold ~init:T.Set.empty ~f:T.Set.add
 
       let t = Opaque.newtype name
       let seq = Seq.instance (module T) t
@@ -432,12 +449,118 @@ struct
           ~write:Seq.ML.of_list
           ~read:Seq.ML.to_list
 
+      let pset = Opaque.view set
+          ~write:set_of_pset
+          ~read:pset_of_set
+
       let def fn typ impl =
         def (name ^ "_" ^ fn) typ impl
 
       let () =
         instance (module T) t;
     end
+  end
+
+  module Value = struct
+    include Regular.Make(struct
+        let name = "value"
+        module T = Value
+      end)
+
+    module Dict = struct
+      let t = Opaque.newtype "value_dict"
+
+      let get t = Fn.flip Dict.find t
+      let set t = Fn.flip Dict.set t
+      let add t = Fn.flip Dict.add t
+      let rem t = Fn.flip Dict.remove t
+      let mem t = Fn.flip Dict.mem t
+      let def fn = def ("dict_" ^ fn)
+
+      let () =
+        def "empty" C.(void @-> returning !!t) (fun () -> Dict.empty);
+        def "is_empty" C.(!!t @-> returning bool) Dict.is_empty;
+    end
+
+    let register (type a)
+        ~total ~nullable (tag : a Value.tag) a =
+      let name = Value.Tag.name tag in
+      let dict fn = Dict.def (fn ^ "_" ^ name) in
+      let def fn = def (fn ^ "_" ^ name) in
+      let a = total a and a_opt = nullable a in
+      def "create" C.(a @-> returning !!t) (Value.create tag);
+      def "get" C.(!!t @-> returning a_opt) (Value.get tag);
+      def "is" C.(!!t @-> returning bool) (Value.is tag);
+      dict "get" C.(!!Dict.t @-> returning a_opt) (Dict.get tag);
+      dict "set" C.(!!Dict.t @-> a @-> returning !!Dict.t) (Dict.set tag);
+      dict "has" C.(!!Dict.t @-> returning bool) (Dict.mem tag);
+      dict "remove" C.(!!Dict.t @-> returning !!Dict.t) (Dict.rem tag);
+      ()
+
+    let register_void_tag (tag : unit Value.tag) =
+      let name = Value.Tag.name tag in
+      let dict fn = Dict.def (fn ^ "_" ^ name) in
+      let def fn = def (fn ^ "_" ^ name) in
+      def "create" C.(void @-> returning !!t) (Value.create tag);
+      def "is" C.(!!t @-> returning bool) (Value.is tag);
+      dict "set" C.(!!Dict.t @-> bool @-> returning !!Dict.t)
+        (fun dict set -> if set
+          then Dict.set tag dict ()
+          else Dict.rem tag dict);
+      dict "has" C.(!!Dict.t @-> returning bool) (Dict.mem tag);
+      ()
+
+    let register_opaque_tag tag =
+      register tag ~nullable:Opaque.nullable ~total:Opaque.total
+
+    let register_enum_tag tag =
+      register tag ~nullable:Enum.partial ~total:Enum.total
+
+    let register_string_tag tag =
+      register tag ~nullable:snd ~total:fst OString.(t,nullable)
+
+    (* treat the weight tag specialy, do not generalize
+       this function to all floats *)
+    let register_weight_tag () =
+      let nullable = C.view C.float
+          ~read:(fun x -> if x < 0. then None else Some x)
+          ~write:(function
+              | None -> ~-.1.
+              | Some x -> x) in
+      register weight ~nullable:snd ~total:fst (C.float, nullable)
+
+
+    let () =
+      register_string_tag comment;
+      register_string_tag python;
+      register_string_tag shell;
+      register_void_tag mark;
+      register_weight_tag ();
+      register_string_tag filename;
+      def "tagname" C.(!!t @-> returning OString.t) Value.tagname
+  end
+
+  module Color = struct
+    module T = struct
+      type t = [
+        | `black
+        | `red
+        | `green
+        | `yellow
+        | `blue
+        | `magenta
+        | `cyan
+        | `white
+        | `gray
+      ] [@@deriving enumerate, compare, sexp]
+    end
+
+    let t : color Enum.t = Enum.define (module T) "color"
+
+    let () =
+      Value.register_enum_tag color t;
+      Value.register_enum_tag foreground t;
+      Value.register_enum_tag background t;
   end
 
   module Endian = struct
@@ -485,6 +608,7 @@ struct
       | Ok x -> x
 
     let () =
+      Value.register_opaque_tag address t;
       def "of_string" C.(string @-> returning !!t) Word.of_string;
       def "of_bool" C.(bool @-> returning !!t) Word.of_bool;
       def "of_int" C.(int @-> int @-> returning !!t)
@@ -821,8 +945,9 @@ struct
         (fun if_ then_ else_ -> Bil.ite ~if_ ~then_ ~else_);
       def "create_extract" C.(int @-> int @-> !!t @-> returning !!t)
         (fun lo hi x -> Bil.extract ~lo ~hi x);
-      def "create_concat" C.(!!t @-> !!t @-> returning !!t) Bil.concat;
-      ()
+      def "create_concat" C.(!!t @-> !!t @-> returning !!t) Bil.concat ;
+      def "fold_consts" C.(!!t @-> returning !!t) Exp.(fixpoint fold_consts);
+      def "free_vars" C.(!!t @-> returning !!Var.pset) Exp.free_vars;
   end
 
   module Stmt = struct
@@ -895,6 +1020,12 @@ struct
       def "create_if" C.(!!Exp.t @-> !!seq @-> !!seq @-> returning !!t)
         (fun exp xs ys -> Bil.if_ exp (Seq.ML.to_list xs) (Seq.ML.to_list ys));
       def "create_cpuexn" C.(int @-> returning !!t) Bil.cpuexn;
+      def "is_referenced" C.(!!Var.t @-> !!t @-> returning bool)
+        Stmt.is_referenced;
+      def "fold_consts" C.(!!t @-> returning !?t)
+        (fun s -> List.hd (Bil.fixpoint Bil.fold_consts [s]));
+      def "free_vars" C.(!!t @-> returning !!Var.pset) Stmt.free_vars;
+
   end
 
   module Tid = struct
@@ -909,6 +1040,32 @@ struct
       def "name" C.(!!t @-> returning OString.t) Tid.name;
       def "from_string" C.(string @-> returning !?t)
         (Error.lift1 Tid.from_string)
+  end
+
+  module Bil = struct
+    let t  = Stmt.list
+    let def fn = def ("bil_" ^ fn)
+
+    let () =
+      def "is_referenced"
+        C.(!!Var.t @-> !!t @-> returning bool)
+        Bil.is_referenced;
+      def "is_assigned"
+        C.(!!Var.t @-> !!t @-> returning bool)
+        (fun var bil -> Bil.is_assigned var bil);
+      def "is_strictly_assigned"
+        C.(!!Var.t @-> !!t @-> returning bool)
+        (fun var bil -> Bil.is_assigned ~strict:true var bil);
+      def "substitute"
+        C.(!!Exp.t @-> !!Exp.t @-> !!t @-> returning !!t)
+        Bil.substitute;
+      def "substitute_var"
+        C.(!!Var.t @-> !!Exp.t @-> !!t @-> returning !!t)
+        Bil.substitute_var;
+      def "free_vars"
+        C.(!!t @-> returning !!Var.pset) Bil.free_vars;
+      def "fold_consts" C.(!!t @-> returning !!t)
+        Bil.(fixpoint fold_consts)
   end
 
   module Block = struct
@@ -936,10 +1093,13 @@ struct
         ~jmp:(fun _ -> Jmp)
 
 
-    type void = Void
+    type a = A
 
-    let t : void term opaque = Opaque.newtype "term"
+    let t : a term opaque = Opaque.newtype "term"
     let term = t
+
+    let attrs term =
+      Term.attrs term |> Dict.to_sequence |> Sequence.map ~f:snd
 
     let () =
       let def fn = def ("term_" ^ fn) in
@@ -947,8 +1107,8 @@ struct
       def "clone" C.(!!t @-> returning !!t) Term.clone;
       def "tid" C.(!!t @-> returning !!Tid.t) Term.tid;
       def "same" C.(!!t @-> !!t @-> returning bool) Term.same;
+      def "attrs" C.(!!t @-> returning !!Value.seq) attrs;
       ()
-
 
     let parentof ~child cls t =
       let def fn = def (String.concat ~sep:"_" [
