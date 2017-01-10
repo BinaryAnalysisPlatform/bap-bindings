@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -12,18 +13,15 @@ void print_sub_names(bap_sub_seq_t *subs) {
     while (bap_sub_seq_iterator_has_next(iter)) {
         bap_sub_t *sub = bap_sub_seq_iterator_next(iter);
         char *name = bap_sub_name(sub);
-        bap_value_dict_t *attrs = bap_term_attrs(sub);
-        bap_word_t *addr = bap_value_dict_get_address(attrs);
+        bap_word_t *addr = bap_term_get_address(sub);
         if (addr) {
-            char *straddr = bap_word_to_string(addr);
-            printf("%s: %s\n", straddr, name);
-            bap_release(straddr);
+            assert(bap_word_fits_into_int64(addr));
+            printf("%llx: %s\n", bap_word_to_int64(addr), name);
             bap_release(name);
         }
         bap_release(sub);
         bap_release(name);
         bap_release(addr);
-        bap_release(attrs);
     }
     bap_release(iter);
 }

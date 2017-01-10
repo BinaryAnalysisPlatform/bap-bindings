@@ -470,19 +470,25 @@ struct
   end
 
   module Value = struct
+    module ML = Value
     include Regular.Make(struct
         let name = "value"
         module T = Value
       end)
 
+    let () = 
+      def "tagname" C.(!!t @-> returning OString.t) Value.tagname
+
+
     module Dict = struct
-      let t = Opaque.newtype "value_dict"
+      type t = Dict.t
+      let t : t opaque = Opaque.newtype "value_dict"
 
       let get t = Fn.flip Dict.find t
       let set t = Fn.flip Dict.set t
       let add t = Fn.flip Dict.add t
       let rem t = Fn.flip Dict.remove t
-      let mem t = Fn.flip Dict.mem t
+      let has t = Fn.flip Dict.mem t
       let def fn = def ("dict_" ^ fn)
 
       let () =
@@ -490,62 +496,6 @@ struct
         def "is_empty" C.(!!t @-> returning bool) Dict.is_empty;
     end
 
-    let register (type a)
-        ~total ~nullable (tag : a Value.tag) a =
-      let name = Value.Tag.name tag in
-      let dict fn = Dict.def (fn ^ "_" ^ name) in
-      let def fn = def (fn ^ "_" ^ name) in
-      let a = total a and a_opt = nullable a in
-      def "create" C.(a @-> returning !!t) (Value.create tag);
-      def "get" C.(!!t @-> returning a_opt) (Value.get tag);
-      def "is" C.(!!t @-> returning bool) (Value.is tag);
-      dict "get" C.(!!Dict.t @-> returning a_opt) (Dict.get tag);
-      dict "set" C.(!!Dict.t @-> a @-> returning !!Dict.t) (Dict.set tag);
-      dict "has" C.(!!Dict.t @-> returning bool) (Dict.mem tag);
-      dict "remove" C.(!!Dict.t @-> returning !!Dict.t) (Dict.rem tag);
-      ()
-
-    let register_void_tag (tag : unit Value.tag) =
-      let name = Value.Tag.name tag in
-      let dict fn = Dict.def (fn ^ "_" ^ name) in
-      let def fn = def (fn ^ "_" ^ name) in
-      def "create" C.(void @-> returning !!t) (Value.create tag);
-      def "is" C.(!!t @-> returning bool) (Value.is tag);
-      dict "set" C.(!!Dict.t @-> bool @-> returning !!Dict.t)
-        (fun dict set -> if set
-          then Dict.set tag dict ()
-          else Dict.rem tag dict);
-      dict "has" C.(!!Dict.t @-> returning bool) (Dict.mem tag);
-      ()
-
-    let register_opaque_tag tag =
-      register tag ~nullable:Opaque.nullable ~total:Opaque.total
-
-    let register_enum_tag tag =
-      register tag ~nullable:Enum.partial ~total:Enum.total
-
-    let register_string_tag tag =
-      register tag ~nullable:snd ~total:fst OString.(t,nullable)
-
-    (* treat the weight tag specialy, do not generalize
-       this function to all floats *)
-    let register_weight_tag () =
-      let nullable = C.view C.float
-          ~read:(fun x -> if x < 0. then None else Some x)
-          ~write:(function
-              | None -> ~-.1.
-              | Some x -> x) in
-      register weight ~nullable:snd ~total:fst (C.float, nullable)
-
-
-    let () =
-      register_string_tag comment;
-      register_string_tag python;
-      register_string_tag shell;
-      register_void_tag mark;
-      register_weight_tag ();
-      register_string_tag filename;
-      def "tagname" C.(!!t @-> returning OString.t) Value.tagname
   end
 
   module Color = struct
@@ -565,10 +515,6 @@ struct
 
     let t : color Enum.t = Enum.define (module T) "color"
 
-    let () =
-      Value.register_enum_tag color t;
-      Value.register_enum_tag foreground t;
-      Value.register_enum_tag background t;
   end
 
   module Endian = struct
@@ -616,7 +562,6 @@ struct
       | Ok x -> x
 
     let () =
-      Value.register_opaque_tag address t;
       def "of_string" C.(string @-> returning !!t) Word.of_string;
       def "of_bool" C.(bool @-> returning !!t) Word.of_bool;
       def "of_int" C.(int @-> int @-> returning !!t)
@@ -1085,11 +1030,10 @@ struct
   end
 
   module Term = struct
+    module ML = Term
     type enum =
         Top | Sub | Arg | Blk | Def | Phi | Jmp
     [@@deriving sexp, enumerate]
-
-
 
     let tag = Term.switch
         ~program:(fun _ -> Top)
@@ -1100,14 +1044,22 @@ struct
         ~def:(fun _ -> Def)
         ~jmp:(fun _ -> Jmp)
 
-
     type a = A
 
     let t : a term opaque = Opaque.newtype "term"
     let term = t
 
+    module Attr = struct
+      type t = a term
+      let t = term
+      let get t = Fn.flip Term.get_attr t
+      let set t = Fn.flip Term.set_attr t
+      let has t = Fn.flip Term.has_attr t
+      let rem t = Fn.flip Term.del_attr t
+    end
+
     let () =
-      let def fn = def ("term_" ^ fn) in
+      let def fn = def ("term_" ^ fn) in 
       def "name" C.(!!t @-> returning OString.t) Term.name;
       def "clone" C.(!!t @-> returning !!t) Term.clone;
       def "tid" C.(!!t @-> returning !!Tid.t) Term.tid;
@@ -1226,6 +1178,7 @@ struct
   end
 
   module Sub = struct
+    module ML = Sub
     include Term.Make(struct
         type t = sub and p = program
         let name = "sub" and cls = sub_t
@@ -1315,6 +1268,15 @@ struct
     let () = C.seal params
     let () = Internal.structure params
 
+    module Attr = struct 
+      type t = project 
+      let t = t
+      let get t = Fn.flip Project.get t
+      let set t = Fn.flip Project.set t 
+      let has t = Fn.flip Project.has t
+      let rem tag t = failwith "not implemented"
+    end
+
     module Input = struct
       let t : Project.input opaque = Opaque.newtype "project_input"
 
@@ -1346,5 +1308,117 @@ struct
 
       def "program" C.(proj_t @-> returning !!Program.t)
         Project.program;
+  end
+
+
+  module Attributes = struct
+    module type Dict = sig
+      type t
+      val t   : t opaque 
+      val get : 'a Value.ML.tag -> t -> 'a option
+      val set : 'a Value.ML.tag -> t -> 'a -> t
+      val has : 'a Value.ML.tag -> t -> bool
+      val rem : 'a Value.ML.tag -> t -> t
+    end
+
+    let register_dict_ops (type t)
+        (module Dict : Dict) ns a a_opt tag = 
+      let def fn = def (ns fn) in
+      def "get" C.(!!Dict.t @-> returning a_opt) (Dict.get tag);
+      def "set" C.(!!Dict.t @-> a @-> returning !!Dict.t) (Dict.set tag);
+      def "has" C.(!!Dict.t @-> returning bool) (Dict.has tag);
+      def "remove" C.(!!Dict.t @-> returning !!Dict.t) (Dict.rem tag)
+
+    let register_void_dict_ops (module Dict : Dict) ns tag =
+      let def fn = def (ns fn) in
+      def "set" C.(!!Dict.t @-> bool @-> returning !!Dict.t)
+        (fun dict set -> if set
+          then Dict.set tag dict ()
+          else Dict.rem tag dict);
+      def "has" C.(!!Dict.t @-> returning bool) (Dict.has tag)
+
+    module NS = struct 
+      let term name fn = "term_" ^ fn ^ "_" ^ name 
+      let dict name fn = "value_dict_" ^ fn ^ "_" ^ name
+      let proj name fn = "project_" ^ fn ^ "_" ^ name 
+    end
+
+    let tagname tag = 
+      Value.ML.Tag.name tag |> 
+      Stringext.replace_all ~pattern:"-" ~with_:"_"
+
+    let register (type a)
+        ~total ~nullable (tag : a Value.ML.tag) a =
+      let name = tagname tag in
+      let def fn = def ("value_" ^ fn ^ "_" ^ name) in
+      let t = Value.t in
+      let a = total a and a_opt = nullable a in
+      def "create" C.(a @-> returning !!t) (Value.ML.create tag);
+      def "get" C.(!!t @-> returning a_opt) (Value.ML.get tag);
+      def "is" C.(!!t @-> returning bool) (Value.ML.is tag);
+      let dict m ns = register_dict_ops m (ns name) a a_opt tag in
+      dict (module Value.Dict) NS.dict;
+      dict (module Term.Attr) NS.term;
+      dict (module Project.Attr) NS.proj;
+      ()
+
+    let register_void_tag (tag : unit Value.ML.tag) =
+      let name = tagname tag in
+      let def fn = def (fn ^ "_" ^ name) in
+      def "create" C.(void @-> returning !!Value.t) (Value.ML.create tag);
+      def "is" C.(!!Value.t @-> returning bool) (Value.ML.is tag);
+      let dict m ns = 
+        register_void_dict_ops m (ns name) tag in
+      dict (module Value.Dict) NS.dict;
+      dict (module Term.Attr) NS.term;
+      dict (module Project.Attr) NS.proj
+
+    let register_opaque_tag tag =
+      register tag ~nullable:Opaque.nullable ~total:Opaque.total
+
+    let register_enum_tag tag =
+      register tag ~nullable:Enum.partial ~total:Enum.total
+
+    let register_string_tag tag =
+      register tag ~nullable:snd ~total:fst OString.(t,nullable)
+
+    (* treat the weight tag specialy, do not generalize
+       this function to all floats *)
+    let register_weight_tag () =
+      let nullable = C.view C.float
+          ~read:(fun x -> if x < 0. then None else Some x)
+          ~write:(function
+              | None -> ~-.1.
+              | Some x -> x) in
+      register weight ~nullable:snd ~total:fst (C.float, nullable)
+
+
+    let () =
+      register_string_tag comment;
+      register_string_tag python;
+      register_string_tag shell;
+      register_void_tag mark;
+      register_weight_tag ();
+      register_string_tag filename;
+      register_enum_tag color Color.t;
+      register_enum_tag foreground Color.t;
+      register_enum_tag background Color.t;
+      register_opaque_tag address Word.t;
+      register_opaque_tag Term.ML.origin Tid.t;
+      register_void_tag Term.ML.synthetic;
+      register_void_tag Term.ML.live;
+      register_void_tag Term.ML.dead;
+      register_void_tag Term.ML.visited;
+      register_opaque_tag Term.ML.precondition Exp.t;
+      register_opaque_tag Term.ML.invariant Exp.t;
+      (* register_string_tag Sub.ML.aliases; *)
+      register_void_tag Sub.ML.const;
+      register_void_tag Sub.ML.stub;
+      register_void_tag Sub.ML.extern;
+      register_void_tag Sub.ML.leaf;
+      register_void_tag Sub.ML.malloc;
+      register_void_tag Sub.ML.noreturn;
+      register_void_tag Sub.ML.returns_twice;
+      register_void_tag Sub.ML.nothrow;
   end
 end
