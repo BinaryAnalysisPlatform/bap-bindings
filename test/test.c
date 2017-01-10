@@ -12,13 +12,20 @@ void print_sub_names(bap_sub_seq_t *subs) {
     while (bap_sub_seq_iterator_has_next(iter)) {
         bap_sub_t *sub = bap_sub_seq_iterator_next(iter);
         char *name = bap_sub_name(sub);
-        char *tnam = bap_term_name(sub);
-        printf("%s: %s\n", name, tnam);
-        bap_free(sub);
-        bap_free(name);
-        bap_free(tnam);
+        bap_value_dict_t *attrs = bap_term_attrs(sub);
+        bap_word_t *addr = bap_value_dict_get_address(attrs);
+        if (addr) {
+            char *straddr = bap_word_to_string(addr);
+            printf("%s: %s\n", straddr, name);
+            bap_release(straddr);
+            bap_release(name);
+        }
+        bap_release(sub);
+        bap_release(name);
+        bap_release(addr);
+        bap_release(attrs);
     }
-    bap_free(iter);
+    bap_release(iter);
 }
 
 
@@ -60,7 +67,7 @@ int main(int argc, const char **argv) {
 
     printf("That's all folks\n"); fflush(stdout);
 
-    bap_free(proj);
-    bap_free(name);
+    bap_release(proj);
+    bap_release(name);
     return 0;
 }

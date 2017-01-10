@@ -173,6 +173,11 @@ struct
         "Type error: expected a value of type %s, but got %s"
         name got ()
 
+    let nullpointer name =
+      invalid_argf
+        "Fatal error: an attempt to dereference a \
+         null pointer of type %s" name ()
+
     let addr ptr = raw_address_of_ptr (to_voidp ptr)
 
     type cstruct = opaque_t structure
@@ -194,6 +199,7 @@ struct
       let is_instance id =
         id = typeid || Hash_set.mem instances id in
       let read (opaque : cstruct ptr) : t =
+        if is_null opaque then nullpointer name;
         let {typeid=id; ovalue} = Root.get (to_voidp opaque) in
         if is_instance id then ovalue
         else type_error name id in
@@ -229,12 +235,14 @@ struct
 
   type 'a ctype = 'a Ctypes.typ
 
-  let free ptr =
-    if OString.is_managed ptr then OString.release ptr
-    else C.Root.release ptr
+  let release ptr =
+    if not (C.is_null ptr) then
+      if OString.is_managed ptr
+      then OString.release ptr
+      else C.Root.release ptr
 
   let () =
-    def "free" C.(ptr void @-> returning void) free
+    def "release" C.(ptr void @-> returning void) release
 
   let standalone_init argc argv =
     try Plugins.run (); 0 with _ -> 1
@@ -1098,16 +1106,13 @@ struct
     let t : a term opaque = Opaque.newtype "term"
     let term = t
 
-    let attrs term =
-      Term.attrs term |> Dict.to_sequence |> Sequence.map ~f:snd
-
     let () =
       let def fn = def ("term_" ^ fn) in
       def "name" C.(!!t @-> returning OString.t) Term.name;
       def "clone" C.(!!t @-> returning !!t) Term.clone;
       def "tid" C.(!!t @-> returning !!Tid.t) Term.tid;
       def "same" C.(!!t @-> !!t @-> returning bool) Term.same;
-      def "attrs" C.(!!t @-> returning !!Value.seq) attrs;
+      def "attrs" C.(!!t @-> returning !!Value.Dict.t) Term.attrs;
       ()
 
     let parentof ~child cls t =
