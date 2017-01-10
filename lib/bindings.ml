@@ -9,6 +9,8 @@ include Self()
 let obj_addr x =
   Nativeint.shift_left (Nativeint.of_int (Obj.magic x)) 1
 
+let name = None
+
 module Make( Internal : Cstubs_inverted.INTERNAL) =
 struct
   module C = Ctypes
@@ -121,6 +123,7 @@ struct
     type 'a t
 
     val newtype : ?prefix:string -> ?suffix:string -> string -> 'a t
+    val view : 'a t -> read:('a -> 'b) -> write:('b -> 'a) -> 'b t
     val total : 'a t -> 'a C.typ
     val nullable : 'a t -> 'a option C.typ
     val instanceof : base:'a t -> 'b t -> unit
@@ -165,7 +168,6 @@ struct
 
     type cstruct = opaque_t structure
 
-
     let nullable t = t.nullable
     let total t = t.total
     let typename t = t.prefix ^ t.base ^ t.suffix
@@ -200,6 +202,15 @@ struct
 
     let instanceof ~base t =
       Hash_set.add base.instances t.id
+
+    let view t ~read ~write = {
+      t with
+      total = C.view t.total ~read ~write;
+      nullable = C.view t.nullable
+          ~read:(Option.map ~f:read)
+          ~write:(Option.map ~f:write);
+    }
+
   end
 
   type 'a opaque = 'a Opaque.t
@@ -240,6 +251,7 @@ struct
         (fun () -> match current_error with
            | {contents=None} -> "unknown error (if any)"
            | {contents=Some err} -> Error.to_string_hum err);
+      def "error_clean" C.(void @-> returning void) clear;
   end
 
   let () =
@@ -249,6 +261,44 @@ struct
 
 
   let fn = Foreign.funptr
+
+
+  module Container = struct
+    module type S0 = Container.S0
+    module type S1 = Container.S1
+
+    let apply hf seq f data = hf seq ~f:(fun elt -> f elt data)
+
+    let instance
+        (type t) (type elt)
+        (module Seq : Container.S0 with type t = t and type elt = elt)
+        seq elt =
+      let visitor = C.(fn (!!elt @-> ptr void @-> returning void)) in
+      let predicate = C.(fn (!!elt @-> ptr void @-> returning bool)) in
+      let name = Opaque.name seq in
+      let def fn = def (name ^ "_" ^ fn) in
+      Internal.typedef visitor (name ^ "_visitor_t");
+      Internal.typedef predicate (name ^ "_predicate_t");
+      def "iter"
+        C.(!!seq @-> visitor @-> ptr void @-> returning void)
+        (apply Seq.iter);
+      def "find"
+        C.(!!seq @-> predicate @-> ptr void @-> returning !?elt)
+        (apply Seq.find);
+      def "exists"
+        C.(!!seq @-> predicate @-> ptr void @-> returning bool)
+        (apply Seq.exists);
+      def "forall"
+        C.(!!seq @-> predicate @-> ptr void @-> returning bool)
+        (apply Seq.for_all);
+      def "count"
+        C.(!!seq @-> predicate @-> ptr void @-> returning int)
+        (apply Seq.count);
+      def "mem" C.(!!seq @-> !!elt @-> returning bool) Seq.mem;
+      ()
+
+
+  end
 
   module Seq = struct
     module ML = Seq
@@ -274,7 +324,7 @@ struct
     let t : poly seq opaque = Opaque.newtype "seq"
 
     let () =
-      let def fn = def (fn ^ "_seq") in
+      let def fn = def ("seq_" ^ fn) in
       def "is_empty" C.(!!t @-> returning bool) Seq.is_empty;
       def "length" C.(!!t @-> returning int) Seq.length;
       def "append" C.(!!t @-> !!t @-> returning !!t) Seq.append;
@@ -283,8 +333,6 @@ struct
       def "take" C.(!!t @-> int @-> returning !!t) Seq.take;
       def "drop" C.(!!t @-> int @-> returning !!t) Seq.drop;
       ()
-
-    let apply hf seq f = hf seq ~f
 
     let iterator name seq iter elt =
       let def fn = def (name ^ "_seq_iterator_" ^ fn) in
@@ -295,36 +343,69 @@ struct
       def "reset" C.(!!iter @-> returning void) Iter.reset
 
     let instance (type t) (module T : T with type t = t) elt =
+      let module Seq0 = struct
+        type elt = t
+        type t = elt seq
+        include (Seq : Container.S1 with type 'a t := 'a seq)
+      end in
       let name = Opaque.name elt in
       let seq : t seq opaque = Opaque.newtype (name ^ "_seq") in
       let iter :  t Iter.t opaque = Opaque.newtype (name ^ "_seq_iterator") in
       let def fn = def (name ^ "_seq_" ^ fn) in
+      let mapper = fn C.(!!elt @-> ptr void @-> returning !!elt) in
+      Internal.typedef mapper (name ^ "seq__mapper");
       Opaque.instanceof ~base:t seq;
-      def "iter"
-        C.(!!seq @-> fn (!!elt @-> returning void) @-> returning void)
-        (apply Seq.iter);
-      def "map"
-        C.(!!seq @-> fn (!!elt @-> returning !!elt) @-> returning !!seq)
-        (apply Seq.map);
-      def "find"
-        C.(!!seq @-> fn (!!elt @-> returning bool) @-> returning !?elt)
-        (apply Seq.find);
-      def "exists"
-        C.(!!seq @-> fn (!!elt @-> returning bool) @-> returning bool)
-        (apply Seq.exists);
-      def "forall"
-        C.(!!seq @-> fn (!!elt @-> returning bool) @-> returning bool)
-        (apply Seq.for_all);
-      def "count"
-        C.(!!seq @-> fn (!!elt @-> returning bool) @-> returning int)
-        (apply Seq.count);
-      def "mem" C.(!!seq @-> !!elt @-> returning bool) Seq.mem;
-
+      Container.instance (module Seq0) seq elt;
       iterator name seq iter elt;
-
+      def "map" C.(!!seq @-> mapper @-> ptr void @-> returning !!seq)
+        (fun seq f data -> Seq.map seq ~f:(fun x -> f x data));
       seq
   end
 
+  module Set = struct
+    type a = A
+    let t : a Hash_set.t opaque = Opaque.newtype "set"
+
+    let () =
+      let def fn = def ("set_" ^ fn) in
+      def "length" C.(!!t @-> returning int) Hash_set.length;
+      def "is_empty" C.(!!t @-> returning bool)
+        (fun xs -> Hash_set.length xs = 0);
+      def "copy" C.(!!t @-> returning !!t) Hash_set.copy;
+      def "clear" C.(!!t @-> returning void) Hash_set.clear;
+      def "equal" C.(!!t @-> !!t @-> returning bool) Hash_set.equal;
+      def "diff" C.(!!t @-> !!t @-> returning !!t) Hash_set.diff
+
+
+    let instance (type a) (module T : Regular.S with type t = a) elt seq =
+      let module Set = struct
+        type t = a Hash_set.t and elt = a
+        include (struct
+          include Hash_set
+          let mem ?equal = mem
+        end : Container.S1 with type 'a t := 'a Hash_set.t)
+      end in
+      let name = Opaque.name elt ^ "_set" in
+      let base = t in
+      let t = Opaque.newtype name in
+      let def fn = def (name ^ "_" ^ fn) in
+      let of_seq xs =
+        let set = T.Hash_set.create () in
+        Sequence.iter ~f:(Hash_set.add set) xs;
+        set in
+      Container.instance (module Set) t elt;
+      Opaque.instanceof ~base t;
+      def "create" C.(void @-> returning !!t) T.Hash_set.create;
+      def "of_seq" C.(!!seq @-> returning !!t) of_seq;
+      def "add" C.(!!t @-> !!elt @-> returning void) Hash_set.add;
+      def "remove" C.(!!t @-> !!elt @-> returning void) Hash_set.remove;
+      def "remove_if"
+        C.(!!t @-> fn (!!elt @-> ptr void @-> returning bool) @->
+           ptr void @-> returning void)
+        (fun set f data -> Hash_set.filter_inplace set ~f:(fun x -> f x data));
+      t
+
+  end
 
   module Regular = struct
     module ML = Regular
@@ -337,7 +418,6 @@ struct
       def "equal"   C.(t @-> t @-> returning bool) T.equal;
       def "hash"    C.(t @-> returning int) T.hash
 
-
     module Make(Spec : sig
         type t
         val name : string
@@ -347,6 +427,10 @@ struct
 
       let t = Opaque.newtype name
       let seq = Seq.instance (module T) t
+      let set = Set.instance (module T) t seq
+      let list = Opaque.view seq
+          ~write:Seq.ML.of_list
+          ~read:Seq.ML.to_list
 
       let def fn typ impl =
         def (name ^ "_" ^ fn) typ impl
@@ -354,9 +438,7 @@ struct
       let () =
         instance (module T) t;
     end
-
   end
-
 
   module Endian = struct
     module T = struct
@@ -373,6 +455,7 @@ struct
   (* small positive int *)
   module Unsigned = struct
     let t = C.int
+    (* use minus one as a sentinel *)
     let partial = C.view t
         ~read:(fun x -> Option.some_if (x >= 0) x)
         ~write:(function None -> -1 | Some x -> x)
@@ -441,8 +524,6 @@ struct
       uop "abs" Word.abs;
       uop "neg" Word.neg;
       uop "lnot" Word.lnot;
-
-
   end
 
 
@@ -474,7 +555,6 @@ struct
     let enum = Enum.define (module Tag) "type"
     let tag_t = Enum.total enum
 
-
     let to_tag = function
       | Type.Imm _ -> `Imm
       | Type.Mem _ -> `Mem
@@ -498,7 +578,6 @@ struct
       Type.Mem (addr_size, size)
 
     let make_imm n = Type.Imm n
-
 
     let () =
       def "tag" C.(!!t @-> returning tag_t) to_tag;
