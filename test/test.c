@@ -43,7 +43,7 @@ int main(int argc, const char **argv) {
         printf("Warning: byteweight is not installed\n");
     }
 
-    bap_project_input_t * input = bap_project_input_file("/bin/test", NULL);
+    bap_project_input_t * input = bap_project_input_file("/bin/true", NULL);
     bap_project_t *proj = bap_project_create(input, &params);
 
     if (!proj) {

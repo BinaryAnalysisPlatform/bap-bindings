@@ -5,7 +5,6 @@ open Bap_plugins.Std
 open Format
 module C = Ctypes
 
-
 include Self()
 
 let obj_addr x =
@@ -15,6 +14,7 @@ let name = None
 
 module Make( Internal : Cstubs_inverted.INTERNAL) =
 struct
+
   module Enum : sig
     module type T = sig
       type t [@@deriving enumerate, compare, sexp]
@@ -476,7 +476,7 @@ struct
         module T = Value
       end)
 
-    let () = 
+    let () =
       def "tagname" C.(!!t @-> returning OString.t) Value.tagname
 
 
@@ -1059,7 +1059,7 @@ struct
     end
 
     let () =
-      let def fn = def ("term_" ^ fn) in 
+      let def fn = def ("term_" ^ fn) in
       def "name" C.(!!t @-> returning OString.t) Term.name;
       def "clone" C.(!!t @-> returning !!t) Term.clone;
       def "tid" C.(!!t @-> returning !!Tid.t) Term.tid;
@@ -1125,11 +1125,73 @@ struct
         Opaque.instanceof ~base:term t;
         Regular.instance (module T) t;
     end
+  end
 
+  module Label = struct
+    module Tag = struct
+      type t = [`Direct | `Indirect]
+      [@@deriving enumerate, sexp, compare]
+    end
+
+    let tag = Enum.define (module Tag) "label"
+    let tag_t = Enum.total tag
+    let t : label opaque = Opaque.newtype "label"
+
+    let to_tag = function
+      | Indirect _ -> `Indirect
+      | Direct _ -> `Direct
+
+    let tid = function
+      | Direct tid -> Some tid
+      | _ -> None
+
+    let target = function
+      | Indirect exp -> Some exp
+      | _ -> None
+
+    let () =
+      def "tag" C.(!!t @-> returning tag_t) to_tag;
+      def "tid" C.(!!t @-> returning !?Tid.t) tid;
+      def "target" C.(!!t @-> returning !?Exp.t) target;
+      def "create_indirect" C.(!!Exp.t @-> returning !!t)
+        (fun exp -> Indirect exp);
+      def "create_direct" C.(!!Tid.t @-> returning !!t)
+        (fun exp -> Direct exp)
   end
 
 
+  module Call = struct
+    module ML = Call
+    include Regular.Make(struct
+        let name = "call"
+        module T = Call
+      end)
 
+    let t : call opaque = Opaque.newtype "call"
+
+    let () =
+      def "create" C.(!!Label.t @-> !!Label.t @-> returning !!t)
+        (fun target return -> Call.create ~return ~target ());
+      def "create_no_return" C.(!!Label.t @-> returning !!t)
+        (fun target -> Call.create ~target ());
+      def "target" C.(!!t @-> returning !!Label.t) Call.target;
+      def "return" C.(!!t @-> returning !?Label.t) Call.return;
+      def "with_target" C.(!!t @-> !!Label.t @-> returning !!t)
+        Call.with_target;
+      def "with_return" C.(!!t @-> !!Label.t @-> returning !!t)
+        Call.with_return;
+      def "with_noreturn" C.(!!t @-> returning !!t)
+        Call.with_noreturn;
+  end
+
+  module Interrupt = struct
+    let t : (int * tid) opaque = Opaque.newtype "interrupt"
+
+    let def fn = def ("interrupt_" ^ fn)
+    let () =
+      def "number" C.(!!t @-> returning int) fst;
+      def "return" C.(!!t @-> returning !!Tid.t) snd;
+  end
 
   module Jmp = struct
     include Term.Make(struct
@@ -1137,6 +1199,65 @@ struct
         let name = "jmp" and cls = jmp_t
         module T = Jmp
       end)
+
+    module Kind = struct
+      module Tag = struct
+        type t = [`Call | `Goto | `Ret | `Int]
+        [@@deriving enumerate, compare, sexp]
+      end
+      let enum = Enum.define (module Tag) "jmp_kind"
+      let t = Enum.total enum
+      let t_opt = Enum.partial enum
+    end
+
+    let kind jmp = match Jmp.kind jmp with
+      | Call _ -> `Call
+      | Goto _ -> `Goto
+      | Ret _ -> `Ret
+      | Int _ -> `Int
+
+    let target jmp = match Jmp.kind jmp with
+      | Call call -> Some (Call.ML.target call)
+      | Goto dst | Ret dst -> Some dst
+      | _ -> None
+
+    let to_call jmp = match Jmp.kind jmp with
+      | Call call -> Some call
+      | _ -> None
+
+    let to_interrupt jmp = match Jmp.kind jmp with
+      | Int (n,ret) -> Some (n,ret)
+      | _ -> None
+
+    let () =
+      def "kind" C.(!!t @-> returning Kind.t) kind;
+      def "target" C.(!!t @-> returning !?Label.t) target;
+      def "to_call" C.(!!t @-> returning !?Call.t) to_call;
+      def "to_interrupt" C.(!!t @-> returning !?Interrupt.t)
+        to_interrupt;
+      def "create_call"
+        C.(!!Call.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
+        (fun call tid cond -> Jmp.create_call ?tid ?cond call);
+      def "create_goto"
+        C.(!!Label.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
+        (fun dst tid cond -> Jmp.create_goto ?tid ?cond dst);
+      def "create_ret"
+        C.(!!Label.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
+        (fun dst tid cond -> Jmp.create_ret ?tid ?cond dst);
+      def "create_int"
+        C.(int @-> !!Tid.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
+        (fun n ret tid cond -> Jmp.create_int ?tid ?cond n ret);
+      def "cond" C.(!!t @-> returning !!Exp.t) Jmp.cond;
+      def "exps" C.(!!t @-> returning !!Exp.seq) Jmp.exps;
+      def "free_vars" C.(!!t @-> returning !!Var.pset) Jmp.free_vars;
+      def "map_exp"
+        C.(!!t @-> fn (!!Exp.t @-> ptr void @-> returning !!Exp.t)
+           @-> ptr void @-> returning !!t)
+        (fun jmp f data -> Jmp.map_exp jmp ~f:(fun exp -> f exp data));
+      def "substitute"
+        C.(!!t @-> !!Exp.t @-> !!Exp.t @-> returning !!t)
+        Jmp.substitute;
+      def "with_cond" C.(!!t @-> !!Exp.t @-> returning !!t) Jmp.with_cond;
   end
 
   module Def = struct
@@ -1268,11 +1389,11 @@ struct
     let () = C.seal params
     let () = Internal.structure params
 
-    module Attr = struct 
-      type t = project 
+    module Attr = struct
+      type t = project
       let t = t
       let get t = Fn.flip Project.get t
-      let set t = Fn.flip Project.set t 
+      let set t = Fn.flip Project.set t
       let has t = Fn.flip Project.has t
       let rem tag t = failwith "not implemented"
     end
@@ -1314,7 +1435,7 @@ struct
   module Attributes = struct
     module type Dict = sig
       type t
-      val t   : t opaque 
+      val t   : t opaque
       val get : 'a Value.ML.tag -> t -> 'a option
       val set : 'a Value.ML.tag -> t -> 'a -> t
       val has : 'a Value.ML.tag -> t -> bool
@@ -1322,7 +1443,7 @@ struct
     end
 
     let register_dict_ops (type t)
-        (module Dict : Dict) ns a a_opt tag = 
+        (module Dict : Dict) ns a a_opt tag =
       let def fn = def (ns fn) in
       def "get" C.(!!Dict.t @-> returning a_opt) (Dict.get tag);
       def "set" C.(!!Dict.t @-> a @-> returning !!Dict.t) (Dict.set tag);
@@ -1337,14 +1458,14 @@ struct
           else Dict.rem tag dict);
       def "has" C.(!!Dict.t @-> returning bool) (Dict.has tag)
 
-    module NS = struct 
-      let term name fn = "term_" ^ fn ^ "_" ^ name 
+    module NS = struct
+      let term name fn = "term_" ^ fn ^ "_" ^ name
       let dict name fn = "value_dict_" ^ fn ^ "_" ^ name
-      let proj name fn = "project_" ^ fn ^ "_" ^ name 
+      let proj name fn = "project_" ^ fn ^ "_" ^ name
     end
 
-    let tagname tag = 
-      Value.ML.Tag.name tag |> 
+    let tagname tag =
+      Value.ML.Tag.name tag |>
       Stringext.replace_all ~pattern:"-" ~with_:"_"
 
     let register (type a)
@@ -1367,7 +1488,7 @@ struct
       let def fn = def (fn ^ "_" ^ name) in
       def "create" C.(void @-> returning !!Value.t) (Value.ML.create tag);
       def "is" C.(!!Value.t @-> returning bool) (Value.ML.is tag);
-      let dict m ns = 
+      let dict m ns =
         register_void_dict_ops m (ns name) tag in
       dict (module Value.Dict) NS.dict;
       dict (module Term.Attr) NS.term;
