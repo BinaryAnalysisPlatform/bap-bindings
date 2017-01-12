@@ -666,6 +666,7 @@ struct
   end
 
   module Var = struct
+    module ML = Var
     include Regular.Make(struct
         type t = var
         let name = "var"
@@ -982,12 +983,13 @@ struct
   end
 
   module Tid = struct
-    let t : tid opaque = Opaque.newtype "tid"
-
+    include Regular.Make(struct
+        let name = "tid"
+        module T = Tid
+      end)
     let def x = def ("tid_" ^ x)
 
     let () =
-      Regular.instance (module Tid) t;
       def "create" C.(void @-> returning !!t) Tid.create;
       def "set_name" C.(!!t @-> string @-> returning void) Tid.set_name;
       def "name" C.(!!t @-> returning OString.t) Tid.name;
@@ -1019,6 +1021,91 @@ struct
         C.(!!t @-> returning !!Var.pset) Bil.free_vars;
       def "fold_consts" C.(!!t @-> returning !!t)
         Bil.(fixpoint fold_consts)
+  end
+
+  module Reg = struct
+    let code = Reg.code
+    include Regular.Make(struct
+        module T = Reg
+        let name = "reg"
+      end);;
+
+    def "code" C.(!!t @-> returning int) Reg.code;
+    def "name" C.(!!t @-> returning OString.t) Reg.name;
+  end
+
+  module Op = struct
+    module Tag = struct
+      type t = [`Reg | `Imm | `Fmm]
+      [@@deriving enumerate, compare, sexp]
+    end
+
+    let enum = Enum.define (module Tag) "op"
+    let tag = Enum.total enum
+
+    let to_tag = function
+      | Op.Reg _ -> `Reg
+      | Op.Imm _ -> `Imm
+      | Op.Fmm _ -> `Fmm
+
+    let to_float = function
+      | Op.Fmm x -> Fmm.to_float x
+      | _ -> 0.0
+
+    let to_int64 = function
+      | Op.Imm x -> Imm.to_int64 x
+      | _ -> 0L
+
+    let to_reg = function
+      | Op.Reg x -> Some x
+      | _ -> None
+
+    let to_reg_code = function
+      | Op.Reg x -> Reg.code x
+      | _ -> -1
+
+
+    include Regular.Make(struct
+        module T = Op
+        let name = "op"
+      end);;
+
+    def "tag" C.(!!t @-> returning tag) to_tag;
+    def "to_float" C.(!!t @-> returning float) to_float;
+    def "to_int64" C.(!!t @-> returning int64_t) to_int64;
+    def "to_reg" C.(!!t @-> returning !?Reg.t) to_reg;
+    def "to_reg_code" C.(!!t @-> returning int) to_reg_code;
+  end
+
+  module Insn = struct
+    module Property = struct
+
+    end
+    include Regular.Make(struct
+        module T = Insn
+        let name = "insn"
+      end);;
+
+    def "name" C.(!!t @-> returning OString.t) Insn.name;
+    def "asm" C.(!!t @-> returning OString.t) Insn.asm;
+    def "bil" C.(!!t @-> returning !!Bil.t) Insn.bil;
+    def "ops" C.(!!t @-> returning !!Op.seq)
+      (fun insn -> Seq.ML.of_array (Insn.ops insn));
+    def "ops_length" C.(!!t @-> returning int)
+      (fun insn -> Array.length (Insn.ops insn));
+    def "ops_nth" C.(!!t @-> int @-> returning !?Op.t)
+      (fun insn i ->
+         let ops = Insn.ops insn in
+         if i < Array.length ops then Some ops.(i) else None);
+    def "is_jump" C.(!!t @-> returning bool) Insn.(is jump);
+    def "is_conditional" C.(!!t @-> returning bool) Insn.(is conditional);
+    def "is_indirect" C.(!!t @-> returning bool) Insn.(is indirect);
+    def "is_call" C.(!!t @-> returning bool) Insn.(is call);
+    def "is_return" C.(!!t @-> returning bool) Insn.(is return);
+    def "may_affect_control_flow" C.(!!t @-> returning bool)
+      Insn.(may affect_control_flow );
+    def "may_load" C.(!!t @-> returning bool) Insn.(may load);
+    def "may_store" C.(!!t @-> returning bool) Insn.(may store);
   end
 
   module Block = struct
@@ -1067,6 +1154,25 @@ struct
       def "attrs" C.(!!t @-> returning !!Value.Dict.t) Term.attrs;
       ()
 
+    module type Leaf = sig
+      type t
+      val free_vars : t -> Var.ML.Set.t
+      val map_exp : t -> f:(exp -> exp) -> t
+      val substitute : t -> exp -> exp -> t
+    end
+
+    let leaf (type t) (module Term : Leaf with type t = t) t =
+      let def fn =  def (Opaque.name t ^ "_" ^ fn) in
+      def "map_exp"
+        C.(!!t @-> fn (!!Exp.t @-> ptr void @-> returning !!Exp.t)
+           @-> ptr void @-> returning !!t)
+        (fun jmp f data -> Term.map_exp jmp ~f:(fun exp -> f exp data));
+      def "free_vars" C.(!!t @-> returning !!Var.pset) Term.free_vars;
+      def "substitute"
+        C.(!!t @-> !!Exp.t @-> !!Exp.t @-> returning !!t)
+        Term.substitute
+
+
     let parentof ~child cls t =
       let def fn = def (String.concat ~sep:"_" [
           Opaque.name t; Opaque.name child; fn
@@ -1104,7 +1210,6 @@ struct
       def "before_rev" C.(!!t @-> !!Tid.t @-> returning !!seq)
         (Term.before cls ~rev:true);
       ()
-
 
     module Make(Spec : sig
         type t
@@ -1228,36 +1333,29 @@ struct
     let to_interrupt jmp = match Jmp.kind jmp with
       | Int (n,ret) -> Some (n,ret)
       | _ -> None
+    ;;
 
-    let () =
-      def "kind" C.(!!t @-> returning Kind.t) kind;
-      def "target" C.(!!t @-> returning !?Label.t) target;
-      def "to_call" C.(!!t @-> returning !?Call.t) to_call;
-      def "to_interrupt" C.(!!t @-> returning !?Interrupt.t)
-        to_interrupt;
-      def "create_call"
-        C.(!!Call.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
-        (fun call tid cond -> Jmp.create_call ?tid ?cond call);
-      def "create_goto"
-        C.(!!Label.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
-        (fun dst tid cond -> Jmp.create_goto ?tid ?cond dst);
-      def "create_ret"
-        C.(!!Label.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
-        (fun dst tid cond -> Jmp.create_ret ?tid ?cond dst);
-      def "create_int"
-        C.(int @-> !!Tid.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
-        (fun n ret tid cond -> Jmp.create_int ?tid ?cond n ret);
-      def "cond" C.(!!t @-> returning !!Exp.t) Jmp.cond;
-      def "exps" C.(!!t @-> returning !!Exp.seq) Jmp.exps;
-      def "free_vars" C.(!!t @-> returning !!Var.pset) Jmp.free_vars;
-      def "map_exp"
-        C.(!!t @-> fn (!!Exp.t @-> ptr void @-> returning !!Exp.t)
-           @-> ptr void @-> returning !!t)
-        (fun jmp f data -> Jmp.map_exp jmp ~f:(fun exp -> f exp data));
-      def "substitute"
-        C.(!!t @-> !!Exp.t @-> !!Exp.t @-> returning !!t)
-        Jmp.substitute;
-      def "with_cond" C.(!!t @-> !!Exp.t @-> returning !!t) Jmp.with_cond;
+    Term.leaf (module Jmp) t;;
+    def "kind" C.(!!t @-> returning Kind.t) kind;;
+    def "target" C.(!!t @-> returning !?Label.t) target;;
+    def "to_call" C.(!!t @-> returning !?Call.t) to_call;;
+    def "to_interrupt" C.(!!t @-> returning !?Interrupt.t)
+      to_interrupt;;
+    def "create_call"
+      C.(!!Call.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
+      (fun call tid cond -> Jmp.create_call ?tid ?cond call);;
+    def "create_goto"
+      C.(!!Label.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
+      (fun dst tid cond -> Jmp.create_goto ?tid ?cond dst);;
+    def "create_ret"
+      C.(!!Label.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
+      (fun dst tid cond -> Jmp.create_ret ?tid ?cond dst);;
+    def "create_int"
+      C.(int @-> !!Tid.t @-> !?Tid.t @-> !?Exp.t @-> returning !!t)
+      (fun n ret tid cond -> Jmp.create_int ?tid ?cond n ret);;
+    def "exps" C.(!!t @-> returning !!Exp.seq) Jmp.exps;;
+    def "cond" C.(!!t @-> returning !!Exp.t) Jmp.cond;;
+    def "with_cond" C.(!!t @-> !!Exp.t @-> returning !!t) Jmp.with_cond;;
   end
 
   module Def = struct
@@ -1265,7 +1363,13 @@ struct
         type t = def and p = blk
         let name = "def" and cls = def_t
         module T = Def
-      end)
+      end);;
+
+    Term.leaf (module Def) t;;
+    def "create" C.(!!Var.t @-> !!Exp.t @-> !?Tid.t @-> returning !!t)
+      (fun var exp tid -> Def.create ?tid var exp);;
+    def "lhs" C.(!!t @-> returning !!Var.t) Def.lhs;;
+    def "rhs" C.(!!t @-> returning !!Exp.t) Def.rhs;;
   end
 
   module Phi = struct
@@ -1273,7 +1377,23 @@ struct
         type t = phi and p = blk
         let name = "phi" and cls = phi_t
         module T = Phi
-      end)
+      end);;
+
+    Term.leaf (module Phi) t;;
+
+    def "create" C.(!!Var.t @-> !!Tid.t @-> !!Exp.t @-> !?Tid.t @->
+                   returning !!t)
+      (fun var inc exp tid -> Phi.create ?tid var inc exp);;
+    def "lhs" C.(!!t @-> returning !!Var.t) Phi.lhs;;
+    def "with_lhs" C.(!!t @-> !!Var.t @-> returning !!t) Phi.with_lhs;
+    def "update" C.(!!t @-> !!Tid.t @-> !!Exp.t @-> returning !!t) Phi.update;
+    def "select" C.(!!t @-> !!Tid.t @-> returning !?Exp.t) Phi.select;
+    def "select_or_unknown" C.(!!t @-> !!Tid.t @-> returning !!Exp.t) Phi.select_or_unknown;
+    def "remove" C.(!!t @-> !!Tid.t @-> returning !!t) Phi.remove;
+    def "incomming" C.(!!t @-> returning !!Tid.seq)
+      Seq.ML.(fun t -> Phi.values t >>| fst);
+    def "exps" C.(!!t @-> returning !!Exp.seq)
+      Seq.ML.(fun t -> Phi.values t >>| snd)
   end
 
   module Blk = struct
@@ -1281,12 +1401,15 @@ struct
         type t = blk and p = sub
         let name = "blk" and cls = blk_t
         module T = Blk
-      end)
+      end);;
 
-    let () =
-      Term.parentof ~child:Phi.t phi_t t;
-      Term.parentof ~child:Def.t def_t t;
-      Term.parentof ~child:Jmp.t jmp_t t;
+    Term.parentof ~child:Phi.t phi_t t;;
+    Term.parentof ~child:Def.t def_t t;;
+    Term.parentof ~child:Jmp.t jmp_t t;;
+
+    def "create" C.(!?Tid.t @-> returning !!t)
+      (fun tid -> Blk.create ?tid ());;
+
   end
 
   module Arg = struct
@@ -1295,6 +1418,7 @@ struct
         let name = "arg" and cls = arg_t
         module T = Arg
       end)
+
 
   end
 
