@@ -255,6 +255,10 @@ struct
     let set err = current_error := Some err
     let clear () = current_error := None
 
+    let lift x = match x with
+      | Ok x -> Some x
+      | Error err -> set err; None
+
     let lift1 f x = match f x with
       | Ok x -> Some x
       | Error err -> set err; None
@@ -1075,6 +1079,43 @@ struct
     def "to_int64" C.(!!t @-> returning int64_t) to_int64;
     def "to_reg" C.(!!t @-> returning !?Reg.t) to_reg;
     def "to_reg_code" C.(!!t @-> returning int) to_reg_code;
+  end
+
+  module Memory = struct
+    let t = Opaque.newtype "memory"
+
+    let def fn = def ("memory_" ^ fn);;
+
+    def "create"
+      C.(Endian.t @-> !!Word.t @-> ptr char @-> int @-> returning !?t)
+      (fun endian addr data len ->
+         let ba = C.bigarray_of_ptr C.array1 len Bigarray.char data in
+         Error.lift1 (Memory.create endian addr) ba);
+
+    def "of_file"
+      C.(Endian.t @-> !!Word.t @-> string @-> returning !?t)
+      (fun endian -> Error.lift2 (Memory.of_file endian));
+
+    def "view"
+      C.(!!t @-> !!Word.t @-> int @-> returning !?t)
+      (fun t from words -> Error.lift (Memory.view ~from ~words t));
+
+    def "merge"
+      C.(!!t @-> !!t @-> returning !?t)
+      (Error.lift2 Memory.merge);
+
+    def "endian" C.(!!t @-> returning Endian.t) Memory.endian;
+
+    def "max_addr" C.(!!t @-> returning !!Word.t) Memory.max_addr;
+    def "min_addr" C.(!!t @-> returning !!Word.t) Memory.min_addr;
+    def "length" C.(!!t @-> returning int) Memory.length;
+
+    def "data" C.(!!t @-> returning (ptr char)) begin fun mem ->
+      let buff = Memory.to_buffer mem in
+      let base = Bigsubstring.base buff in
+      let base_ptr = C.bigarray_start C.array1 base in
+      C.(base_ptr +@ Bigsubstring.pos buff)
+    end
   end
 
   module Insn = struct
