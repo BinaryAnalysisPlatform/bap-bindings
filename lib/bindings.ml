@@ -1082,7 +1082,7 @@ struct
   end
 
   module Memory = struct
-    let t = Opaque.newtype "memory"
+    let t : mem opaque = Opaque.newtype "memory"
 
     let def fn = def ("memory_" ^ fn);;
 
@@ -1116,6 +1116,117 @@ struct
       let base_ptr = C.bigarray_start C.array1 base in
       C.(base_ptr +@ Bigsubstring.pos buff)
     end
+  end
+
+  module Memmap = struct
+    module Binding = struct
+      module T = struct type t = mem * value end
+      type t = T.t
+      let t : t opaque = Opaque.newtype "mem_value_pair"
+      let seq : t seq opaque = Seq.instance (module T) t;;
+      def "fst" C.(!!t @-> returning !!Memory.t) fst;
+      def "snd" C.(!!t @-> returning !!Value.t) snd;
+    end
+
+    module Memmap0 = struct
+      type elt = value
+      type t = elt memmap
+      include (Memmap : Container.S1 with type 'a t := 'a memmap)
+    end
+
+
+    let t : value memmap opaque = Opaque.newtype "memmap";;
+
+    Container.instance (module Memmap0) t Value.t;;
+
+    def "empty" C.(void @-> returning !!t) (fun () -> Memmap.empty);
+    def "add" C.(!!t @-> !!Memory.t @-> !!Value.t @-> returning !!t)
+      Memmap.add;
+    def "dominators" C.(!!t @-> !!Memory.t @-> returning !!Binding.seq)
+      Memmap.dominators;
+    def "intersections" C.(!!t @-> !!Memory.t @-> returning !!Binding.seq)
+      Memmap.intersections;
+    def "intersects" C.(!!t @-> !!Memory.t @-> returning bool)
+      Memmap.intersects;
+    def "dominates" C.(!!t @-> !!Memory.t @-> returning bool)
+      Memmap.dominates;
+    def "contains" C.(!!t @-> !!Word.t @-> returning bool)
+      Memmap.contains;
+    def "lookup" C.(!!t @-> !!Word.t @-> returning !!Binding.seq)
+      Memmap.lookup
+
+  end
+
+  module Image = struct
+
+    module Segment = struct
+      module Seg = Image.Segment
+      include Regular.Make(struct
+          module T = Seg
+          let name = "segment"
+        end);;
+
+      def "name" C.(!!t @-> returning OString.t) Seg.name;
+      def "is_writable" C.(!!t @-> returning bool) Seg.is_writable;
+      def "is_readable" C.(!!t @-> returning bool) Seg.is_readable;
+      def "is_exectutable" C.(!!t @-> returning bool) Seg.is_executable;
+    end
+
+    module Symbol = struct
+      module Sym = Image.Symbol
+      include Regular.Make(struct
+          module T = Sym
+          let name = "symbol"
+        end);;
+
+      def "name" C.(!!t @-> returning OString.t) Sym.name;
+      def "is_function" C.(!!t @-> returning bool) Sym.is_function;
+      def "is_debug" C.(!!t @-> returning bool) Sym.is_debug;
+    end
+
+    let t : image opaque = Opaque.newtype "image"
+
+    let warnings = ref []
+
+    let lift_result res = match Error.lift res with
+      | None -> None
+      | Some (t,warns) -> warnings := warns; Some t
+
+    ;;
+
+    def "create" C.(string @-> string_opt @-> returning !?t)
+      (fun path backend -> lift_result (Image.create ?backend path));
+
+    def "of_data"
+      C.(ptr char @-> int @-> string_opt @-> returning !?t )
+      begin fun data len backend ->
+        let ba = C.bigarray_of_ptr C.array1 len Bigarray.char data in
+        lift_result (Image.of_bigstring ?backend ba)
+      end;
+
+    def "entry_point" C.(!!t @-> returning !!Word.t) Image.entry_point;
+    def "filename" C.(!!t @-> returning OString.nullable) Image.filename;
+    def "arch" C.(!!t @-> returning Arch.total) Image.arch;
+    def "length" C.(!!t @-> returning int)
+      (fun img -> Bigstring.length (Image.data img));;
+    def "data" C.(!!t @-> returning (ptr char))
+      (fun img -> C.bigarray_start C.array1 (Image.data img));
+    def "memory" C.(!!t @-> returning !!Memmap.t) Image.memory;
+    def "memory_of_segment"
+      C.(!!t @-> !!Segment.t @-> returning !!Memory.t)
+      Image.memory_of_segment;
+    def "is_symbol_contiguous"
+      C.(!!t @-> !!Symbol.t @-> returning bool)
+      (fun img sym -> Seq.ML.is_empty (snd (Image.memory_of_symbol img sym)));
+    def "memory_of_contiguous_symbol"
+      C.(!!t @-> !!Symbol.t @-> returning !!Memory.t)
+      (fun img sym -> fst (Image.memory_of_symbol img sym));
+    def "symbols_of_segment"
+      C.(!!t @-> !!Segment.t @-> returning !!Symbol.seq)
+      Image.symbols_of_segment;
+    def "segment_of_symbol"
+      C.(!!t @-> !!Symbol.t @-> returning !!Segment.t)
+      Image.segment_of_symbol;
   end
 
   module Insn = struct
