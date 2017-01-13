@@ -1263,6 +1263,16 @@ struct
     def "may_store" C.(!!t @-> returning bool) Insn.(may store);
   end
 
+  module Edge_kind = struct
+    module Tag = struct
+      type t = [`Tree | `Back | `Cross | `Forward]
+      [@@deriving enumerate, compare, sexp]
+    end
+    let tag : edge_kind Enum.t =
+      Enum.define (module Tag) "graph_edge_kind"
+    let t = Enum.total tag
+  end
+
   module Graph(Spec : sig
       module G : Graph
       val namespace : string
@@ -1283,18 +1293,6 @@ struct
     let el = edge_label
 
     let def fn = def (namespace ^ "_" ^ fn)
-
-
-    module Edge_kind = struct
-      module Tag = struct
-      type t = [`Tree | `Back | `Cross | `Forward]
-               [@@deriving enumerate, compare, sexp]
-      end
-      let tag : edge_kind Enum.t =
-        Enum.define (module Tag) "graph_edge_kind"
-      let t = Enum.total tag
-    end
-
 
     module Dfs = struct
         type params = Params
@@ -1433,7 +1431,7 @@ struct
         Opaque.newtype "cfg_node_label"
       let node_label = !!node_label_opaque
     end)
-end
+  end
 
   module Source = struct
     let rooter
@@ -1648,17 +1646,7 @@ end
         val cls : (p,t) cls
         module T : Regular.ML.S with type t = t term
       end) = struct
-      open Spec
-
-      let t = Opaque.newtype name
-      let seq = Seq.instance (module T) t
-
-      let def fn typ impl =
-        def (name ^ "_" ^ fn) typ impl
-
-      let () =
-        Opaque.instanceof ~base:term t;
-        Regular.instance (module T) t;
+      include Regular.Make(Spec)
     end
   end
 
@@ -1871,6 +1859,20 @@ end
       def "ssa" C.(!!t @-> returning !!t) Sub.ssa;
       def "is_ssa" C.(!!t @-> returning bool) Sub.is_ssa;
   end
+
+  module Callgraph = struct
+    include Graph(struct
+        module G = Graphs.Callgraph
+        let namespace = "callgraph"
+        let node = Tid.t
+        let nodes = Tid.seq
+        let edge : G.edge opaque = Opaque.newtype "callgraph_edge"
+        let edges = Seq.instance (module G.Edge) edge
+        let node_label = !!Tid.t
+        let edge_label = !!Jmp.list
+      end)
+  end
+
 
   module Program = struct
     let t : program term opaque = Opaque.newtype "program"
