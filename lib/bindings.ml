@@ -1268,6 +1268,118 @@ struct
     let t = Opaque.newtype "cfg"
   end
 
+
+  module Source = struct
+    let rooter
+      : rooter source opaque = Opaque.newtype "rooter_source"
+    let brancher
+      : brancher source opaque = Opaque.newtype "brancher_source"
+    let symbolizer
+      : symbolizer source opaque = Opaque.newtype "symbolizer_source"
+    let reconstructor
+      : reconstructor source opaque =
+      Opaque.newtype "reconstructor_source"
+
+    let factory
+        (type t) (module Factory : Source.Factory.S with type t = t)
+        typ name =
+      let def fn x = def (name ^ "_factory_" ^ fn) x in
+      def "find" C.(string @-> returning !?typ) Factory.find
+  end
+
+  module Rooter = struct
+    let t : rooter opaque = Opaque.newtype "rooter"
+    let () =
+      Source.factory (module Rooter.Factory) Source.rooter "rooter"
+  end
+
+  module Brancher = struct
+    let t : brancher opaque = Opaque.newtype "brancher"
+  end
+
+  module Symbolizer = struct
+    let t : symbolizer opaque = Opaque.newtype "symbolizer"
+  end
+
+  module Reconstructor = struct
+    let t : reconstructor opaque = Opaque.newtype "reconstructor"
+  end
+
+
+  module Code = struct
+    module T = struct
+      type t = mem * insn
+    end
+    type t = T.t
+    let t : t opaque = Opaque.newtype "code"
+    let seq : t seq opaque = Seq.instance (module T) t;;
+
+    def "code_mem" C.(!!t @-> returning !!Memory.t) fst;
+    def "code_insn" C.(!!t @-> returning !!Insn.t) snd;
+  end
+
+
+  module Disasm = struct
+    let t : disasm opaque = Opaque.newtype "disasm"
+
+    type params = Params
+
+    let params : params C.structure ctype =
+      C.structure "bap_disasm_parameters_t"
+
+    let params_field name typ =
+      C.field params ("bap_disasm__" ^ name) typ
+
+    let rooter_p = params_field "rooter" !?Rooter.t
+    let brancher_p = params_field "brancher" !?Brancher.t
+    let backend_p = params_field "backend" C.string_opt
+
+    let () = C.seal params
+    let () = Internal.structure params
+
+    let params_get fld t =
+      if C.is_null t then None
+      else C.getf C.(!@t) fld
+
+    let def fn = def ("disasm_" ^ fn);;
+
+    def "of_mem"
+      C.(Arch.total @-> !!Memory.t @-> ptr params @-> returning !?t)
+      begin fun arch mem params ->
+        Disasm.of_mem
+          ?rooter:(params_get rooter_p params)
+          ?brancher:(params_get brancher_p params)
+          ?backend:(params_get backend_p params) arch mem |>
+        Error.lift
+      end;
+
+    def "of_image"
+      C.(!!Image.t @-> ptr params @-> returning !?t)
+      begin fun image params ->
+        Disasm.of_image
+          ?rooter:(params_get rooter_p params)
+          ?brancher:(params_get brancher_p params)
+          ?backend:(params_get backend_p params) image |>
+        Error.lift
+      end;
+
+    def "of_file"
+      C.(string @-> ptr params @-> string_opt @-> returning !?t)
+      begin fun name params loader ->
+        Disasm.of_file
+          ?loader
+          ?rooter:(params_get rooter_p params)
+          ?brancher:(params_get brancher_p params)
+          ?backend:(params_get backend_p params) name |>
+        Error.lift
+      end;
+
+    def "merge" C.(!!t @-> !!t @-> returning !!t) Disasm.merge;
+    def "code" C.(!!t @-> returning !!Code.seq) Disasm.insns;
+    def "insns" C.(!!t @-> returning !!Insn.seq)
+      Seq.ML.(fun d -> Disasm.insns d >>| snd);
+  end
+
   module Term = struct
     module ML = Term
     type enum =
@@ -1603,42 +1715,6 @@ struct
       Regular.instance (module Program) t;
       Term.enumerator ~elt:Sub.t ~seq:Sub.seq sub_t t
 
-  end
-
-  module Source = struct
-    let rooter
-      : rooter source opaque = Opaque.newtype "rooter_source"
-    let brancher
-      : brancher source opaque = Opaque.newtype "brancher_source"
-    let symbolizer
-      : symbolizer source opaque = Opaque.newtype "symbolizer_source"
-    let reconstructor
-      : reconstructor source opaque =
-      Opaque.newtype "reconstructor_source"
-
-    let factory
-        (type t) (module Factory : Source.Factory.S with type t = t)
-        typ name =
-      let def fn x = def (name ^ "_factory_" ^ fn) x in
-      def "find" C.(string @-> returning !?typ) Factory.find
-  end
-
-  module Rooter = struct
-    let t : rooter opaque = Opaque.newtype "rooter"
-    let () =
-      Source.factory (module Rooter.Factory) Source.rooter "rooter"
-  end
-
-  module Brancher = struct
-    let t : brancher opaque = Opaque.newtype "brancher"
-  end
-
-  module Symbolizer = struct
-    let t : symbolizer opaque = Opaque.newtype "symbolizer"
-  end
-
-  module Reconstructor = struct
-    let t : reconstructor opaque = Opaque.newtype "reconstructor"
   end
 
   module Project = struct
