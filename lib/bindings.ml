@@ -1,6 +1,7 @@
 open Core_kernel.Std
 open Bap.Std
 open Regular.Std
+open Graphlib.Std
 open Bap_plugins.Std
 open Format
 module C = Ctypes
@@ -282,6 +283,8 @@ struct
 
 
   let fn = Foreign.funptr
+  let fn_opt = Foreign.funptr_opt
+
 
 
   module Container = struct
@@ -1260,14 +1263,177 @@ struct
     def "may_store" C.(!!t @-> returning bool) Insn.(may store);
   end
 
+  module Graph(Spec : sig
+      module G : Graph
+      val namespace : string
+      val node : G.node opaque
+      val edge : G.edge opaque
+      val nodes : G.node seq opaque
+      val edges : G.edge seq opaque
+      val node_label : G.Node.label C.typ
+      val edge_label : G.Edge.label C.typ
+    end) = struct
+    open Spec
+
+    let t : G.t opaque = Opaque.newtype namespace
+    let g = !!t
+    let n = !!node
+    let e = !!edge
+    let nl = node_label
+    let el = edge_label
+
+    let def fn = def (namespace ^ "_" ^ fn)
+
+
+    module Edge_kind = struct
+      module Tag = struct
+      type t = [`Tree | `Back | `Cross | `Forward]
+               [@@deriving enumerate, compare, sexp]
+      end
+      let tag : edge_kind Enum.t =
+        Enum.define (module Tag) "graph_edge_kind"
+      let t = Enum.total tag
+    end
+
+
+    module Dfs = struct
+        type params = Params
+
+        let s = C.(ptr void)
+        let params : params C.structure ctype =
+          C.structure (namespace ^ "_visitor")
+
+        let (%:) name typ =
+          C.field params (namespace ^ "_" ^ name) (fn_opt typ)
+
+        let start_tree =
+          "start_tree" %: C.(n @-> s @-> returning void)
+        let enter_node =
+          "enter_node" %: C.(int @-> n @-> s @-> returning void)
+        let leave_node =
+          "leave_node" %: C.(int @-> n @-> s @-> returning void)
+        let enter_edge =
+          "enter_edge" %: C.(Edge_kind.t @-> e @-> s @-> returning void)
+        let leave_edge =
+          "leave_edge" %: C.(Edge_kind.t @-> e @-> s @-> returning void)
+
+        let () =
+          C.seal params;
+          Internal.structure params;
+    end
+
+    module Node = struct
+      let def fn = def ("node_" ^ fn);;
+      def "create" C.(nl @-> returning n) G.Node.create;
+      def "label" C.(n @-> returning nl) G.Node.label;
+      def "mem" C.(n @-> g @-> returning bool) G.Node.mem;
+      def "succs" C.(n @-> g @-> returning !!nodes) G.Node.succs;
+      def "preds" C.(n @-> g @-> returning !!nodes) G.Node.preds;
+      def "inputs" C.(n @-> g @-> returning !!edges) G.Node.inputs;
+      def "outputs" C.(n @-> g @-> returning !!edges) G.Node.outputs;
+      def "in_degree" C.(n @-> g @-> returning int) (G.Node.degree ~dir:`In);
+      def "out_degree" C.(n @-> g @-> returning int) (G.Node.degree ~dir:`Out);
+      def "insert" C.(n @-> g @-> returning g) G.Node.insert;
+      def "update" C.(n @-> nl @-> g @-> returning g) G.Node.update;
+      def "remove" C.(n @-> g @-> returning g) G.Node.remove;
+      def "has_edge" C.(n @-> n @-> g @-> returning bool) G.Node.has_edge;
+      def "edge" C.(n @-> n @-> g @-> returning !?edge) G.Node.edge;
+    end;;
+
+    module Edge = struct
+      let def fn = def ("edge_" ^ fn);;
+      def "create" C.(n @-> n @-> el @-> returning e) G.Edge.create;
+      def "label" C.(e @-> returning el) G.Edge.label;
+      def "src" C.(e @-> returning n) G.Edge.src;
+      def "dst" C.(e @-> returning n) G.Edge.dst;
+      def "mem" C.(e @-> g @-> returning bool) G.Edge.mem;
+      def "insert" C.(e @-> g @-> returning g) G.Edge.insert;
+      def "update" C.(e @-> el @-> g @-> returning g) G.Edge.update;
+      def "remove" C.(e @-> g @-> returning g) G.Edge.remove;
+    end;;
+
+    def "empty" C.(void @-> returning g) (fun () -> G.empty);
+    def "nodes" C.(g @-> returning !!nodes) G.nodes;
+    def "edges" C.(g @-> returning !!edges) G.edges;
+
+    def "union" C.(g @-> g @-> returning g)
+      (Graphlib.union (module G));
+
+    def "inter" C.(g @-> g @-> returning g)
+      (Graphlib.inter (module G));
+
+    def "dfs"
+      C.(g @-> ptr Dfs.params @-> ptr void @->
+         bool @-> !?node @-> returning void)
+      begin fun g vis_ptr data rev start ->
+        let open Dfs in
+        let vis = C.(!@vis_ptr) in
+        let (<~) fld f = Option.iter (C.getf vis fld) ~f in
+        let start_tree node () = start_tree <~ fun f -> f node data in
+        let enter_node n node () = enter_node <~ fun f -> f n node data in
+        let leave_node n node () = leave_node <~ fun f -> f n node data in
+        let enter_edge n edge () = enter_edge <~ fun f -> f n edge data in
+        let leave_edge n edge () = leave_edge <~ fun f -> f n edge data in
+        Graphlib.depth_first_search (module G)
+          ~rev ?start
+          ~start_tree ~enter_node ~leave_node
+          ~enter_edge ~leave_edge g ~init:()
+      end;
+
+    def "get_nodes_in_postorder"
+      C.(g @-> bool @-> !?node @-> returning !!nodes)
+      (fun g rev start ->
+         Graphlib.postorder_traverse (module G) ?start ~rev g);
+
+    def "get_nodes_in_reverse_postorder"
+      C.(g @-> bool @-> !?node @-> returning !!nodes)
+      (fun g rev start ->
+         Graphlib.reverse_postorder_traverse (module G) ?start ~rev g);
+
+    def "is_reachable"
+      C.(g @-> bool @-> n @-> n @-> returning bool)
+      (fun g rev n1 n2 -> Graphlib.is_reachable (module G) g ~rev n1 n2);
+
+    def "visit_reachable"
+      C.(g @-> bool @-> n @->
+         fn (n @-> ptr void @-> returning void) @->
+         ptr void @->
+         returning void)
+      begin fun g rev n f data ->
+        Graphlib.fold_reachable ~rev (module G) ~init:() ~f:(fun () n ->
+            f n data) g n
+      end;
+  end
+
+  module Edge = struct
+    module Tag = struct
+      type t = [`Jump | `Cond | `Fall]
+               [@@deriving enumerate, compare, sexp]
+    end
+    let tag : edge Enum.t = Enum.define (module Tag) "edge"
+    let t = Enum.total tag
+  end
+
+
   module Block = struct
     let t = Opaque.newtype "block"
+    let seq = Seq.instance (module Block) t
   end
 
   module Cfg = struct
-    let t = Opaque.newtype "cfg"
-  end
-
+    include Graph(struct
+      module G = Graphs.Cfg
+      let namespace = "cfg"
+      let node = Block.t
+      let nodes = Block.seq
+      let edge : G.edge opaque = Opaque.newtype "cfg_edge"
+      let edges = Seq.instance (module G.Edge) edge
+      let edge_label = Edge.t
+      let node_label_opaque : G.Node.label opaque =
+        Opaque.newtype "cfg_node_label"
+      let node_label = !!node_label_opaque
+    end)
+end
 
   module Source = struct
     let rooter
@@ -1328,7 +1494,7 @@ struct
       C.structure "bap_disasm_parameters_t"
 
     let params_field name typ =
-      C.field params ("bap_disasm__" ^ name) typ
+      C.field params ("bap_disasm_" ^ name) typ
 
     let rooter_p = params_field "rooter" !?Rooter.t
     let brancher_p = params_field "brancher" !?Brancher.t
