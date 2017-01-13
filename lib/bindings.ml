@@ -1873,6 +1873,34 @@ struct
       end)
   end
 
+  module Irgraph = struct
+    include Graph(struct
+        module G = Graphs.Ir
+        let namespace = "irgraph"
+        let node : G.node opaque = Opaque.newtype "irgraph_node"
+        let nodes = Seq.instance (module G.Node) node
+        let edge : G.edge opaque = Opaque.newtype "irgraph_edge"
+        let edges = Seq.instance (module G.Edge) edge
+        let node_label = !!Blk.t
+        let opaque_edge_label : G.Edge.label opaque =
+          Opaque.newtype "irgraph_edge_label"
+        let edge_label = !!opaque_edge_label
+      end)
+
+    module G = Graphs.Ir
+
+    module Edge_extra = struct
+      open Edge;;
+      def "jmps_before" C.(e @-> g @-> returning !!Jmp.seq)
+        (G.Edge.jmps `before);
+      def "jmps_after" C.(e @-> g @-> returning !!Jmp.seq)
+        (G.Edge.jmps `after);
+      def "jmp" C.(e @-> returning !!Jmp.t) G.Edge.jmp;
+      def "tid" C.(e @-> returning !!Tid.t) G.Edge.tid;
+      def "cond" C.(e @-> g @-> returning !!Exp.t) G.Edge.cond;
+    end
+  end
+
 
   module Program = struct
     let t : program term opaque = Opaque.newtype "program"
