@@ -2011,6 +2011,38 @@ struct
       end)
   end
 
+  module Symtab = struct
+    module Fn = struct
+      module T = struct
+        type t = string * block * cfg
+      end
+      let t : T.t opaque = Opaque.newtype "symbtab_fn";;
+
+      let seq = Seq.instance (module T) t;;
+      let list = Opaque.view seq
+          ~write:Seq.ML.of_list
+          ~read:Seq.ML.to_list;;
+
+      def "symtab_fn_name" C.(!!t @-> returning OString.t) fst3;
+      def "symtab_fn_entry" C.(!!t @-> returning !!Block.t) snd3;
+      def "symtab_fn_graph" C.(!!t @-> returning !!Cfg.t) trd3;
+    end
+
+    let fn = Fn.t
+    let t : symtab opaque = Opaque.newtype "symbtab"
+
+    let def fn = def ("symbtab_" ^ fn);;
+    def "empty" C.(void @-> returning !!t) (fun () -> Symtab.empty);
+    def "add_symbol" C.(!!t @-> !!fn @-> returning !!t) Symtab.add_symbol;
+    def "remove" C.(!!t @-> !!fn @-> returning !!t) Symtab.remove;
+    def "find_by_name" C.(!!t @-> string @-> returning !?fn) Symtab.find_by_name;
+    def "find_by_start" C.(!!t @-> !!Word.t @-> returning !?fn) Symtab.find_by_start;
+    def "owners" C.(!!t @-> !!Word.t @-> returning !!Fn.list) Symtab.owners;
+    def "dominators" C.(!!t @-> !!Memory.t @-> returning !!Fn.list) Symtab.dominators;
+    def "intersecting" C.(!!t @-> !!Memory.t @-> returning !!Fn.list) Symtab.intersecting;
+    def "enum" C.(!!t @-> returning !!Fn.seq) Symtab.to_sequence;
+  end
+
   module Program = struct
     include Term.Make(struct
         type t = program
@@ -2023,6 +2055,7 @@ struct
 
     def "create" C.(!?Tid.t @-> returning !!t)
       (fun tid -> Program.create ?tid ());
+    def "lift" C.(!!Symtab.t @-> returning !!t) Program.lift;
     def "to_graph" C.(!!t @-> returning !!Callgraph.t)
       Program.to_graph;
     def "lookup_sub" C.(!!t @-> !!Tid.t @-> returning !?Sub.t)
