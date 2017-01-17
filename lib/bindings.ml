@@ -1664,9 +1664,7 @@ struct
 
     module Make(Spec : sig
         type t
-        type p
         val name : string
-        val cls : (p,t) cls
         module T : Regular.ML.S with type t = t term
       end) = struct
       include Regular.Make(Spec);;
@@ -1864,7 +1862,9 @@ struct
     Term.parentof ~child:Phi.t phi_t t;;
     Term.parentof ~child:Def.t def_t t;;
     Term.parentof ~child:Jmp.t jmp_t t;;
-
+    Term.enumerator ~elt:Phi.t ~seq:Phi.seq phi_t t;;
+    Term.enumerator ~elt:Def.t ~seq:Def.seq def_t t;;
+    Term.enumerator ~elt:Jmp.t ~seq:Jmp.seq jmp_t t;;
 
     def "create" C.(!?Tid.t @-> returning !!t) (fun tid -> Blk.create ?tid ());;
     def "lift" C.(!!Cfg.t @-> !!Block.t @-> returning !!list) Blk.lift;
@@ -1971,6 +1971,8 @@ struct
       end);;
     Term.parentof ~child:Arg.t arg_t t;
     Term.parentof ~child:Blk.t blk_t t;
+    Term.enumerator ~elt:Arg.t ~seq:Arg.seq arg_t t;;
+    Term.enumerator ~elt:Blk.t ~seq:Blk.seq blk_t t;;
     def "lift"
       C.(!!Block.t @-> !!Cfg.t @-> returning !!t) Sub.lift;
     def "name" C.(!!t @-> returning OString.t) Sub.name;
@@ -2010,13 +2012,55 @@ struct
   end
 
   module Program = struct
-    let t : program term opaque = Opaque.newtype "program"
+    include Term.Make(struct
+        type t = program
+        let name = "program"
+        module T = Program
+      end);;
 
-    let def name typ = def ("program_" ^ name) typ
+    Term.parentof ~child:Sub.t sub_t t;
+    Term.enumerator ~elt:Sub.t ~seq:Sub.seq sub_t t;
 
-    let () =
-      Regular.instance (module Program) t;
-      Term.enumerator ~elt:Sub.t ~seq:Sub.seq sub_t t
+    def "create" C.(!?Tid.t @-> returning !!t)
+      (fun tid -> Program.create ?tid ());
+    def "to_graph" C.(!!t @-> returning !!Callgraph.t)
+      Program.to_graph;
+    def "lookup_sub" C.(!!t @-> !!Tid.t @-> returning !?Sub.t)
+      (Program.lookup sub_t);
+    def "lookup_blk" C.(!!t @-> !!Tid.t @-> returning !?Blk.t)
+      (Program.lookup blk_t);
+    def "lookup_arg" C.(!!t @-> !!Tid.t @-> returning !?Arg.t)
+      (Program.lookup arg_t);
+    def "lookup_phi" C.(!!t @-> !!Tid.t @-> returning !?Phi.t)
+      (Program.lookup phi_t);
+    def "lookup_def" C.(!!t @-> !!Tid.t @-> returning !?Def.t)
+      (Program.lookup def_t);
+    def "lookup_jmp" C.(!!t @-> !!Tid.t @-> returning !?Jmp.t)
+      (Program.lookup jmp_t);
+    def "parentof_blk" C.(!!t @-> !!Tid.t @-> returning !?Sub.t)
+      (Program.parent blk_t);
+    def "parentof_arg" C.(!!t @-> !!Tid.t @-> returning !?Sub.t)
+      (Program.parent arg_t);
+    def "parentof_phi" C.(!!t @-> !!Tid.t @-> returning !?Blk.t)
+      (Program.parent phi_t);
+    def "parentof_def" C.(!!t @-> !!Tid.t @-> returning !?Blk.t)
+      (Program.parent def_t);
+    def "parentof_jmp" C.(!!t @-> !!Tid.t @-> returning !?Blk.t)
+      (Program.parent jmp_t);
+
+
+    module Builder = struct
+      let program = t
+      let t : Program.Builder.t opaque =
+        Opaque.newtype "program_builder"
+      let def fn = def ("builder_" ^ fn);;
+      def "create" C.(!?Tid.t @-> returning !!t)
+        (fun tid -> Program.Builder.create ?tid ());
+      def "add_sub" C.(!!t @-> !!Sub.t @-> returning void)
+        Program.Builder.add_sub;
+      def "result" C.(!!t @-> returning !!program) Program.Builder.result;
+    end
+
 
   end
 
