@@ -319,9 +319,6 @@ struct
         C.(!!seq @-> predicate @-> ptr void @-> returning int)
         (apply Seq.count);
       def "mem" C.(!!seq @-> !!elt @-> returning bool) Seq.mem;
-      ()
-
-
   end
 
   module Seq = struct
@@ -383,6 +380,11 @@ struct
       iterator name seq iter elt;
       def "map" C.(!!seq @-> mapper @-> ptr void @-> returning !!seq)
         (fun seq f data -> Seq.map seq ~f:(fun x -> f x data));
+      def "of_array" C.(ptr !!elt @-> int @-> returning !!seq)
+        begin fun ptr len ->
+          let arr = C.CArray.from_ptr ptr len in
+          Seq.init len ~f:(C.CArray.get arr)
+        end;
       seq
   end
 
@@ -1233,9 +1235,6 @@ struct
   end
 
   module Insn = struct
-    module Property = struct
-
-    end
     include Regular.Make(struct
         module T = Insn
         let name = "insn"
@@ -1412,10 +1411,33 @@ struct
     let t = Enum.total tag
   end
 
+  module Code = struct
+    module T = struct
+      type t = mem * insn
+    end
+    type t = T.t
+    let t : t opaque = Opaque.newtype "code"
+    let seq : t seq opaque = Seq.instance (module T) t;;
+    let list = Opaque.view seq
+          ~write:Seq.ML.of_list
+          ~read:Seq.ML.to_list;;
+    def "code_mem" C.(!!t @-> returning !!Memory.t) fst;
+    def "code_insn" C.(!!t @-> returning !!Insn.t) snd;
+  end
+
 
   module Block = struct
     let t = Opaque.newtype "block"
     let seq = Seq.instance (module Block) t
+    let def fn = def ("block_" ^ fn);;
+
+    def "create" C.(!!Memory.t @-> !!Code.list @-> returning !!t)
+      Block.create;
+    def "addr" C.(!!t @-> returning !!Word.t) Block.addr;
+    def "memory" C.(!!t @-> returning !!Memory.t) Block.memory;
+    def "leader" C.(!!t @-> returning !!Insn.t) Block.leader;
+    def "terminator" C.(!!t @-> returning !!Insn.t) Block.terminator;
+    def "insns" C.(!!t @-> returning !!Code.list) Block.insns;
   end
 
   module Cfg = struct
@@ -1453,8 +1475,11 @@ struct
 
   module Rooter = struct
     let t : rooter opaque = Opaque.newtype "rooter"
-    let () =
-      Source.factory (module Rooter.Factory) Source.rooter "rooter"
+    let def fn = def ("rooter_" ^ fn);;
+    Source.factory (module Rooter.Factory) Source.rooter "rooter";
+    def "create" C.(!!Word.seq @-> returning !!t) Rooter.create;
+    def "roots" C.(!!t @-> returning !!Word.seq) Rooter.roots;
+    def "union" C.(!!t @-> !!t @-> returning !!t) Rooter.union;
   end
 
   module Brancher = struct
@@ -1470,21 +1495,11 @@ struct
   end
 
 
-  module Code = struct
-    module T = struct
-      type t = mem * insn
-    end
-    type t = T.t
-    let t : t opaque = Opaque.newtype "code"
-    let seq : t seq opaque = Seq.instance (module T) t;;
-
-    def "code_mem" C.(!!t @-> returning !!Memory.t) fst;
-    def "code_insn" C.(!!t @-> returning !!Insn.t) snd;
-  end
 
 
   module Disasm = struct
     let t : disasm opaque = Opaque.newtype "disasm"
+    let insn = Disasm.insn
 
     type params = Params
 
@@ -1506,6 +1521,9 @@ struct
       else C.getf C.(!@t) fld
 
     let def fn = def ("disasm_" ^ fn);;
+
+
+    def "of_cfg" C.(!!Cfg.t @-> returning !!t) Disasm.create;
 
     def "of_mem"
       C.(Arch.total @-> !!Memory.t @-> ptr params @-> returning !?t)
@@ -1538,6 +1556,7 @@ struct
         Error.lift
       end;
 
+    def "cfg" C.(!!t @-> returning !!Cfg.t) Disasm.cfg;
     def "merge" C.(!!t @-> !!t @-> returning !!t) Disasm.merge;
     def "code" C.(!!t @-> returning !!Code.seq) Disasm.insns;
     def "insns" C.(!!t @-> returning !!Insn.seq)
@@ -1646,7 +1665,9 @@ struct
         val cls : (p,t) cls
         module T : Regular.ML.S with type t = t term
       end) = struct
-      include Regular.Make(Spec)
+      include Regular.Make(Spec);;
+      Opaque.instanceof ~base:term t;
+
     end
   end
 
@@ -1828,6 +1849,8 @@ struct
     def "create" C.(!?Tid.t @-> returning !!t)
       (fun tid -> Blk.create ?tid ());;
 
+    def "lift" C.(!!Cfg.t @-> !!Block.t @-> returning !!list) Blk.lift;
+
   end
 
   module Arg = struct
@@ -1900,6 +1923,18 @@ struct
       def "cond" C.(e @-> g @-> returning !!Exp.t) G.Edge.cond;
     end
   end
+
+  module Tidgraph = Graph(struct
+      module G = Graphs.Tid
+      let namespace = "tidgraph"
+      let node = Tid.t
+      let nodes = Tid.seq
+      let node_label = !!Tid.t
+      let edge : G.edge opaque = Opaque.newtype "tidgraph_edge"
+      let edges = Seq.instance (module G.Edge) edge
+      let edge_label = !!Tid.t
+    end)
+
 
 
   module Program = struct
@@ -2073,6 +2108,7 @@ struct
       register_enum_tag foreground Color.t;
       register_enum_tag background Color.t;
       register_opaque_tag address Word.t;
+      register_opaque_tag Disasm.insn Insn.t;
       register_opaque_tag Term.ML.origin Tid.t;
       register_void_tag Term.ML.synthetic;
       register_void_tag Term.ML.live;
