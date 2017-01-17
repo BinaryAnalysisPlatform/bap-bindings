@@ -1923,38 +1923,16 @@ struct
          | Some intent -> Arg.with_intent t intent)
   end
 
-  module Sub = struct
-    module ML = Sub
-    include Term.Make(struct
-        type t = sub and p = program
-        let name = "sub" and cls = sub_t
-        module T = Sub
-      end)
-
-    let () =
-      Term.parentof ~child:Arg.t arg_t t;
-      Term.parentof ~child:Blk.t blk_t t;
-      def "lift"
-        C.(!!Block.t @-> !!Cfg.t @-> returning !!t) Sub.lift;
-      def "name" C.(!!t @-> returning OString.t) Sub.name;
-      def "with_name" C.(!!t @-> string @-> returning !!t)
-        Sub.with_name;
-      def "ssa" C.(!!t @-> returning !!t) Sub.ssa;
-      def "is_ssa" C.(!!t @-> returning bool) Sub.is_ssa;
-  end
-
-  module Callgraph = struct
-    include Graph(struct
-        module G = Graphs.Callgraph
-        let namespace = "callgraph"
-        let node = Tid.t
-        let nodes = Tid.seq
-        let edge : G.edge opaque = Opaque.newtype "callgraph_edge"
-        let edges = Seq.instance (module G.Edge) edge
-        let node_label = !!Tid.t
-        let edge_label = !!Jmp.list
-      end)
-  end
+  module Tidgraph = Graph(struct
+      module G = Graphs.Tid
+      let namespace = "tidgraph"
+      let node = Tid.t
+      let nodes = Tid.seq
+      let node_label = !!Tid.t
+      let edge : G.edge opaque = Opaque.newtype "tidgraph_edge"
+      let edges = Seq.instance (module G.Edge) edge
+      let edge_label = !!Tid.t
+    end)
 
   module Irgraph = struct
     include Graph(struct
@@ -1984,18 +1962,42 @@ struct
     end
   end
 
-  module Tidgraph = Graph(struct
-      module G = Graphs.Tid
-      let namespace = "tidgraph"
-      let node = Tid.t
-      let nodes = Tid.seq
-      let node_label = !!Tid.t
-      let edge : G.edge opaque = Opaque.newtype "tidgraph_edge"
-      let edges = Seq.instance (module G.Edge) edge
-      let edge_label = !!Tid.t
-    end)
+  module Sub = struct
+    module ML = Sub
+    include Term.Make(struct
+        type t = sub and p = program
+        let name = "sub" and cls = sub_t
+        module T = Sub
+      end)
 
+    let () =
+      Term.parentof ~child:Arg.t arg_t t;
+      Term.parentof ~child:Blk.t blk_t t;
+      def "lift"
+        C.(!!Block.t @-> !!Cfg.t @-> returning !!t) Sub.lift;
+      def "name" C.(!!t @-> returning OString.t) Sub.name;
+      def "with_name" C.(!!t @-> string @-> returning !!t)
+        Sub.with_name;
+      def "ssa" C.(!!t @-> returning !!t) Sub.ssa;
+      def "is_ssa" C.(!!t @-> returning bool) Sub.is_ssa;
+      def "free_vars" C.(!!t @-> returning !!Var.pset) Sub.free_vars;
+      def "to_graph" C.(!!t @-> returning !!Tidgraph.t) Sub.to_graph;
+      def "to_cfg" C.(!!t @-> returning !!Irgraph.t) Sub.to_cfg;
+      def "of_cfg" C.(!!Irgraph.t @-> returning !!t) Sub.of_cfg;
+  end
 
+  module Callgraph = struct
+    include Graph(struct
+        module G = Graphs.Callgraph
+        let namespace = "callgraph"
+        let node = Tid.t
+        let nodes = Tid.seq
+        let edge : G.edge opaque = Opaque.newtype "callgraph_edge"
+        let edges = Seq.instance (module G.Edge) edge
+        let node_label = !!Tid.t
+        let edge_label = !!Jmp.list
+      end)
+  end
 
   module Program = struct
     let t : program term opaque = Opaque.newtype "program"
@@ -2155,7 +2157,6 @@ struct
               | None -> ~-.1.
               | Some x -> x) in
       register weight ~nullable:snd ~total:fst (C.float, nullable)
-
 
     let () =
       register_string_tag comment;
