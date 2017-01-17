@@ -380,11 +380,14 @@ struct
       iterator name seq iter elt;
       def "map" C.(!!seq @-> mapper @-> ptr void @-> returning !!seq)
         (fun seq f data -> Seq.map seq ~f:(fun x -> f x data));
-      def "of_array" C.(ptr !!elt @-> int @-> returning !!seq)
+      def "view" C.(ptr !!elt @-> int @-> returning !!seq)
         begin fun ptr len ->
           let arr = C.CArray.from_ptr ptr len in
           Seq.init len ~f:(C.CArray.get arr)
         end;
+      def "copy_from" C.(ptr !!elt @-> int @-> returning !!seq)
+        (fun ptr len ->
+          Seq.of_list C.CArray.(from_ptr ptr len |> to_list));
       seq
   end
 
@@ -1494,9 +1497,6 @@ struct
     let t : reconstructor opaque = Opaque.newtype "reconstructor"
   end
 
-
-
-
   module Disasm = struct
     let t : disasm opaque = Opaque.newtype "disasm"
     let insn = Disasm.insn
@@ -1601,14 +1601,14 @@ struct
       def "attrs" C.(!!t @-> returning !!Value.Dict.t) Term.attrs;
       ()
 
-    module type Leaf = sig
+    module type Expressible = sig
       type t
       val free_vars : t -> Var.ML.Set.t
       val map_exp : t -> f:(exp -> exp) -> t
       val substitute : t -> exp -> exp -> t
     end
 
-    let leaf (type t) (module Term : Leaf with type t = t) t =
+    let expressible (type t) (module Term : Expressible with type t = t) t =
       let def fn =  def (Opaque.name t ^ "_" ^ fn) in
       def "map_exp"
         C.(!!t @-> fn (!!Exp.t @-> ptr void @-> returning !!Exp.t)
@@ -1774,7 +1774,7 @@ struct
       | _ -> None
     ;;
 
-    Term.leaf (module Jmp) t;;
+    Term.expressible (module Jmp) t;;
     def "kind" C.(!!t @-> returning Kind.t) kind;;
     def "target" C.(!!t @-> returning !?Label.t) target;;
     def "to_call" C.(!!t @-> returning !?Call.t) to_call;;
@@ -1804,7 +1804,7 @@ struct
         module T = Def
       end);;
 
-    Term.leaf (module Def) t;;
+    Term.expressible (module Def) t;;
     def "create" C.(!!Var.t @-> !!Exp.t @-> !?Tid.t @-> returning !!t)
       (fun var exp tid -> Def.create ?tid var exp);;
     def "lhs" C.(!!t @-> returning !!Var.t) Def.lhs;;
@@ -1818,7 +1818,7 @@ struct
         module T = Phi
       end);;
 
-    Term.leaf (module Phi) t;;
+    Term.expressible (module Phi) t;;
 
     def "create" C.(!!Var.t @-> !!Tid.t @-> !!Exp.t @-> !?Tid.t @->
                    returning !!t)
@@ -1842,14 +1842,51 @@ struct
         module T = Blk
       end);;
 
+    let blk = t
+
+    module Pair = struct
+      let t : (blk term * blk term) opaque = Opaque.newtype "blk_pair";;
+      def "blk_pair_fst" C.(!!t @-> returning !!blk) fst;
+      def "blk_pair_snd" C.(!!t @-> returning !!blk) snd;
+    end;;
+
+    module Expressible = struct
+      include Blk
+      let map_exp t ~f = map_exp t ~f
+      let substitute t e g = substitute t e g
+    end;;
+
+    Term.expressible (module Expressible) t;;
     Term.parentof ~child:Phi.t phi_t t;;
     Term.parentof ~child:Def.t def_t t;;
     Term.parentof ~child:Jmp.t jmp_t t;;
 
-    def "create" C.(!?Tid.t @-> returning !!t)
-      (fun tid -> Blk.create ?tid ());;
 
+    def "create" C.(!?Tid.t @-> returning !!t) (fun tid -> Blk.create ?tid ());;
     def "lift" C.(!!Cfg.t @-> !!Block.t @-> returning !!list) Blk.lift;
+    def "from_insn" C.(!!Insn.t @-> returning !!list) Blk.from_insn;
+    def "split_before" C.(!!t @-> !!Def.t @-> returning !!Pair.t) Blk.split_before;
+    def "split_after" C.(!!t @-> !!Def.t @-> returning !!Pair.t) Blk.split_after;
+    def "split_top" C.(!!t @-> returning !!Pair.t) Blk.split_top;
+    def "split_bot" C.(!!t @-> returning !!Pair.t) Blk.split_bot;
+    def "split_while"
+      C.(!!t @->
+         fn (!!Def.t @-> ptr void @-> returning bool) @->
+         ptr void @-> returning !!Pair.t)
+      (fun blk f data -> Blk.split_while blk ~f:(fun def -> f def data));
+    def "defines_var" C.(!!t @-> !!Var.t @-> returning bool) Blk.defines_var;
+    def "uses_var" C.(!!t @-> !!Var.t @-> returning bool) Blk.uses_var ;
+
+    module Builder = struct
+      let t : Blk.Builder.t opaque = Opaque.newtype "block_builder"
+      let def fn = def ("builder_" ^ fn);;
+      def "create" C.(!?Tid.t @-> returning !!t) (fun tid ->
+          Blk.Builder.create ?tid ());
+      def "add_phi" C.(!!t @-> !!Phi.t @-> returning void) Blk.Builder.add_phi;
+      def "add_def" C.(!!t @-> !!Def.t @-> returning void) Blk.Builder.add_def;
+      def "add_jmp" C.(!!t @-> !!Jmp.t @-> returning void) Blk.Builder.add_jmp;
+      def "result" C.(!!t @-> returning !!blk) Blk.Builder.result;
+    end
 
   end
 
