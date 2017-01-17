@@ -21,7 +21,9 @@ struct
       type t [@@deriving enumerate, compare, sexp]
     end
     type 'a t
-    val define : ?first:int -> (module T with type t = 'a) -> string -> 'a t
+    val define :
+      ?invalid:string ->
+      ?first:int -> (module T with type t = 'a) -> string -> 'a t
     val total : 'a t -> 'a C.typ
     val partial : 'a t -> 'a option C.typ
 
@@ -35,7 +37,8 @@ struct
       partial : 'a option C.typ;
     }
 
-    let define ?(first=0) (type t) (module E: T with type t = t) name =
+    let define ?(invalid="invalid")
+        ?(first=0) (type t) (module E: T with type t = t) name =
       assert (first >= 0);
       let enum = Array.of_list E.all in
       Array.sort enum ~cmp:E.compare;
@@ -56,7 +59,8 @@ struct
       let cases = List.mapi E.all ~f:(fun i x ->
           let name = String.uppercase (Sexp.to_string (E.sexp_of_t x)) in
           pref ^ "_" ^ name, Int64.of_int (first + i)) in
-      let cases = (pref ^ "_INVALID", Int64.of_int (~-1)) :: cases in
+      let invalid = String.uppercase invalid in
+      let cases = (pref ^ "_" ^ invalid, Int64.of_int (~-1)) :: cases in
       let t = view read write in
       let partial = view read_opt write_opt in
       Internal.enum cases t;
@@ -1891,13 +1895,32 @@ struct
   end
 
   module Arg = struct
+    module ML = Arg
     include Term.Make(struct
         type t = arg and p = sub
         let name = "arg" and cls = arg_t
         module T = Arg
       end)
 
+    module Intent = struct
+      module Tag = struct
+        type t = intent = In | Out | Both
+        [@@deriving enumerate, compare, sexp]
+      end
+      let enum = Enum.define (module Tag) ~invalid:"unknown" "intent"
+      let t = Enum.partial enum
+    end;;
 
+    def "create"
+      C.(!!Var.t @-> !!Exp.t @-> Intent.t @-> !?Tid.t @-> returning !!t)
+      (fun var exp intent tid -> Arg.create ?tid ?intent var exp);
+    def "lhs" C.(!!t @-> returning !!Var.t) Arg.lhs;
+    def "rhs" C.(!!t @-> returning !!Exp.t) Arg.rhs;
+    def "intent" C.(!!t @-> returning Intent.t) Arg.intent;
+    def "with_intent" C.(!!t @-> Intent.t @-> returning !!t)
+      (fun t intent -> match intent with
+         | None -> Arg.with_unknown_intent t
+         | Some intent -> Arg.with_intent t intent)
   end
 
   module Sub = struct
@@ -2162,5 +2185,9 @@ struct
       register_void_tag Sub.ML.noreturn;
       register_void_tag Sub.ML.returns_twice;
       register_void_tag Sub.ML.nothrow;
+      register_void_tag Arg.ML.warn_unused;
+      register_void_tag Arg.ML.alloc_size;
+      register_void_tag Arg.ML.nonnull;
+      register_string_tag Arg.ML.format;
   end
 end
