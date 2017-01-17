@@ -2152,15 +2152,27 @@ struct
         ?reconstructor:~@reconstructor_p
         input
 
-    let () =
-      def "create" C.(!!Input.t @-> ptr params @-> returning !?t)
-        (Error.lift2 create);
+    ;;
+    def "create" C.(!!Input.t @-> ptr params @-> returning !?t)
+      (Error.lift2 create);
 
-      def "arch" C.(proj_t @-> returning Arch.total)
-        Project.arch;
+    def "arch" C.(proj_t @-> returning Arch.total)
+      Project.arch;
 
-      def "program" C.(proj_t @-> returning !!Program.t)
-        Project.program;
+    def "program" C.(proj_t @-> returning !!Program.t)
+      Project.program;
+
+    def "with_program" C.(proj_t @-> !!Program.t @-> returning proj_t)
+      Project.with_program;
+
+    def "symbols" C.(proj_t @-> returning !!Symtab.t)
+      Project.symbols;
+
+    def "with_symbols" C.(proj_t @-> !!Symtab.t @-> returning proj_t)
+      Project.with_symbols;
+
+    def "memory" C.(proj_t @-> returning !!Memmap.t)
+      Project.memory;
   end
 
 
