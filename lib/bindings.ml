@@ -1882,7 +1882,7 @@ struct
     def "uses_var" C.(!!t @-> !!Var.t @-> returning bool) Blk.uses_var ;
 
     module Builder = struct
-      let t : Blk.Builder.t opaque = Opaque.newtype "block_builder"
+      let t : Blk.Builder.t opaque = Opaque.newtype "blk_builder"
       let def fn = def ("builder_" ^ fn);;
       def "create" C.(!?Tid.t @-> returning !!t) (fun tid ->
           Blk.Builder.create ?tid ());
@@ -1968,22 +1968,32 @@ struct
         type t = sub and p = program
         let name = "sub" and cls = sub_t
         module T = Sub
-      end)
+      end);;
+    Term.parentof ~child:Arg.t arg_t t;
+    Term.parentof ~child:Blk.t blk_t t;
+    def "lift"
+      C.(!!Block.t @-> !!Cfg.t @-> returning !!t) Sub.lift;
+    def "name" C.(!!t @-> returning OString.t) Sub.name;
+    def "with_name" C.(!!t @-> string @-> returning !!t)
+      Sub.with_name;
+    def "ssa" C.(!!t @-> returning !!t) Sub.ssa;
+    def "is_ssa" C.(!!t @-> returning bool) Sub.is_ssa;
+    def "free_vars" C.(!!t @-> returning !!Var.pset) Sub.free_vars;
+    def "to_graph" C.(!!t @-> returning !!Tidgraph.t) Sub.to_graph;
+    def "to_cfg" C.(!!t @-> returning !!Irgraph.t) Sub.to_cfg;
+    def "of_cfg" C.(!!Irgraph.t @-> returning !!t) Sub.of_cfg;
 
-    let () =
-      Term.parentof ~child:Arg.t arg_t t;
-      Term.parentof ~child:Blk.t blk_t t;
-      def "lift"
-        C.(!!Block.t @-> !!Cfg.t @-> returning !!t) Sub.lift;
-      def "name" C.(!!t @-> returning OString.t) Sub.name;
-      def "with_name" C.(!!t @-> string @-> returning !!t)
-        Sub.with_name;
-      def "ssa" C.(!!t @-> returning !!t) Sub.ssa;
-      def "is_ssa" C.(!!t @-> returning bool) Sub.is_ssa;
-      def "free_vars" C.(!!t @-> returning !!Var.pset) Sub.free_vars;
-      def "to_graph" C.(!!t @-> returning !!Tidgraph.t) Sub.to_graph;
-      def "to_cfg" C.(!!t @-> returning !!Irgraph.t) Sub.to_cfg;
-      def "of_cfg" C.(!!Irgraph.t @-> returning !!t) Sub.of_cfg;
+    module Builder = struct
+      let sub = t
+      let t : Sub.Builder.t opaque = Opaque.newtype "sub_builder"
+      let def fn = def ("builder_" ^ fn);;
+      def "create" C.(!?Tid.t @-> string_opt @-> returning !!t)
+        (fun tid name -> Sub.Builder.create ?tid ?name ());
+      def "add_arg" C.(!!t @-> !!Arg.t @-> returning void)
+        Sub.Builder.add_arg;
+      def "add_blk" C.(!!t @-> !!Blk.t @-> returning void)
+        Sub.Builder.add_blk;
+    end
   end
 
   module Callgraph = struct
