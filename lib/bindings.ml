@@ -487,6 +487,7 @@ struct
 
   module Value = struct
     module ML = Value
+    type t = value
     include Regular.Make(struct
         let name = "value"
         module T = Value
@@ -1131,44 +1132,56 @@ struct
   end
 
   module Memmap = struct
-    module Binding = struct
-      module T = struct type t = mem * value end
-      type t = T.t
-      let t : t opaque = Opaque.newtype "mem_value_pair"
-      let seq : t seq opaque = Seq.instance (module T) t;;
-      def "fst" C.(!!t @-> returning !!Memory.t) fst;
-      def "snd" C.(!!t @-> returning !!Value.t) snd;
+    module Make(Value : sig
+        type t
+        val t : t opaque
+      end) = struct
+      module Binding = struct
+        module T = struct type t = mem * Value.t end
+        type t = T.t
+        let name = "mem_" ^ Opaque.name Value.t ^ "_pair"
+        let t : t opaque = Opaque.newtype name
+        let seq : t seq opaque = Seq.instance (module T) t;;
+        def (name ^ "_fst") C.(!!t @-> returning !!Memory.t) fst;
+        def (name ^ "_snd") C.(!!t @-> returning !!Value.t) snd;
+      end
+
+      module Memmap0 = struct
+        type elt = Value.t
+        type t = elt memmap
+        include (Memmap : Container.S1 with type 'a t := 'a memmap)
+      end
+
+      let name = "mem_" ^ Opaque.name Value.t ^ "_map"
+
+      let t : Value.t memmap opaque = Opaque.newtype name;;
+
+      let def fn = def (name ^ "_" ^ fn);;
+
+      Container.instance (module Memmap0) t Value.t;;
+
+      def "empty" C.(void @-> returning !!t) (fun () -> Memmap.empty);
+      def "add" C.(!!t @-> !!Memory.t @-> !!Value.t @-> returning !!t)
+        Memmap.add;
+      def "dominators" C.(!!t @-> !!Memory.t @-> returning !!Binding.seq)
+        Memmap.dominators;
+      def "intersections" C.(!!t @-> !!Memory.t @-> returning !!Binding.seq)
+        Memmap.intersections;
+      def "intersects" C.(!!t @-> !!Memory.t @-> returning bool)
+        Memmap.intersects;
+      def "dominates" C.(!!t @-> !!Memory.t @-> returning bool)
+        Memmap.dominates;
+      def "contains" C.(!!t @-> !!Word.t @-> returning bool)
+        Memmap.contains;
+      def "lookup" C.(!!t @-> !!Word.t @-> returning !!Binding.seq)
+        Memmap.lookup
     end
-
-    module Memmap0 = struct
-      type elt = value
-      type t = elt memmap
-      include (Memmap : Container.S1 with type 'a t := 'a memmap)
-    end
-
-
-    let t : value memmap opaque = Opaque.newtype "memmap";;
-
-    Container.instance (module Memmap0) t Value.t;;
-
-    def "empty" C.(void @-> returning !!t) (fun () -> Memmap.empty);
-    def "add" C.(!!t @-> !!Memory.t @-> !!Value.t @-> returning !!t)
-      Memmap.add;
-    def "dominators" C.(!!t @-> !!Memory.t @-> returning !!Binding.seq)
-      Memmap.dominators;
-    def "intersections" C.(!!t @-> !!Memory.t @-> returning !!Binding.seq)
-      Memmap.intersections;
-    def "intersects" C.(!!t @-> !!Memory.t @-> returning bool)
-      Memmap.intersects;
-    def "dominates" C.(!!t @-> !!Memory.t @-> returning bool)
-      Memmap.dominates;
-    def "contains" C.(!!t @-> !!Word.t @-> returning bool)
-      Memmap.contains;
-    def "lookup" C.(!!t @-> !!Word.t @-> returning !!Binding.seq)
-      Memmap.lookup
-
+    module Value = Make(Value)
+    module Unit = Make(struct
+        type t = unit
+        let t : t opaque = Opaque.newtype "unit"
+      end)
   end
-
   module Image = struct
 
     module Segment = struct
@@ -1223,7 +1236,7 @@ struct
       (fun img -> Bigstring.length (Image.data img));;
     def "data" C.(!!t @-> returning (ptr char))
       (fun img -> C.bigarray_start C.array1 (Image.data img));
-    def "memory" C.(!!t @-> returning !!Memmap.t) Image.memory;
+    def "memory" C.(!!t @-> returning !!Memmap.Value.t) Image.memory;
     def "memory_of_segment"
       C.(!!t @-> !!Segment.t @-> returning !!Memory.t)
       Image.memory_of_segment;
@@ -2026,6 +2039,7 @@ struct
       def "symtab_fn_name" C.(!!t @-> returning OString.t) fst3;
       def "symtab_fn_entry" C.(!!t @-> returning !!Block.t) snd3;
       def "symtab_fn_graph" C.(!!t @-> returning !!Cfg.t) trd3;
+      def "symtab_fn_span" C.(!!t @-> returning !!Memmap.Unit.t) Symtab.span;
     end
 
     let fn = Fn.t
@@ -2098,6 +2112,7 @@ struct
   end
 
   module Project = struct
+    module ML = Project
     let t : project opaque = Opaque.newtype "project"
     let proj_t = !!t
 
@@ -2133,11 +2148,17 @@ struct
     module Input = struct
       let t : Project.input opaque = Opaque.newtype "project_input"
 
-      let def name typ impl = def ("input_" ^ name) typ impl
+      let def name typ impl = def ("input_" ^ name) typ impl;;
 
-      let () =
-        def "file" C.(string @-> string_opt @-> returning !!t)
-          (fun filename loader -> Project.Input.file ?loader ~filename);
+      def "file" C.(string @-> string_opt @-> returning !!t)
+        (fun filename loader -> Project.Input.file ?loader ~filename);
+      def "binary"
+        C.(string @-> Arch.total @-> !?Word.t @-> returning !!t)
+        (fun filename arch base ->
+           Project.Input.binary ?base ~filename arch);
+      def "register_loader"
+        C.(string @-> fn (string @-> returning !!t) @-> returning void)
+        Project.Input.register_loader;
     end
 
     let create input params =
@@ -2151,8 +2172,10 @@ struct
         ?rooter:~@rooter_p
         ?reconstructor:~@reconstructor_p
         input
-
     ;;
+
+
+
     def "create" C.(!!Input.t @-> ptr params @-> returning !?t)
       (Error.lift2 create);
 
@@ -2171,8 +2194,13 @@ struct
     def "with_symbols" C.(proj_t @-> !!Symtab.t @-> returning proj_t)
       Project.with_symbols;
 
-    def "memory" C.(proj_t @-> returning !!Memmap.t)
+    def "memory" C.(proj_t @-> returning !!Memmap.Value.t)
       Project.memory;
+
+    def "storage" C.(proj_t @-> returning !!Value.Dict.t) Project.storage;
+    def "with_storage"
+      C.(proj_t @-> !!Value.Dict.t @-> returning proj_t)
+      Project.with_storage;
   end
 
 
@@ -2215,12 +2243,19 @@ struct
     let register (type a)
         ~total ~nullable (tag : a Value.ML.tag) a =
       let name = tagname tag in
-      let def fn = def ("value_" ^ fn ^ "_" ^ name) in
       let t = Value.t in
       let a = total a and a_opt = nullable a in
-      def "create" C.(a @-> returning !!t) (Value.ML.create tag);
-      def "get" C.(!!t @-> returning a_opt) (Value.ML.get tag);
-      def "is" C.(!!t @-> returning bool) (Value.ML.is tag);
+      let module Value_interface = struct
+        let def fn = def ("value_" ^ fn ^ "_" ^ name);;
+        def "create" C.(a @-> returning !!t) (Value.ML.create tag);
+        def "get" C.(!!t @-> returning a_opt) (Value.ML.get tag);
+        def "is" C.(!!t @-> returning bool) (Value.ML.is tag);
+      end in
+      let module Memory_interface = struct
+        def ("project_memory_tag_with_" ^ name)
+          C.(!!Project.t @-> !!Memory.t @-> a @-> returning !!Project.t)
+          (fun proj mem v -> Project.ML.tag_memory proj mem tag v)
+      end in
       let dict m ns = register_dict_ops m (ns name) a a_opt tag in
       dict (module Value.Dict) NS.dict;
       dict (module Term.Attr) NS.term;
@@ -2245,7 +2280,11 @@ struct
       register tag ~nullable:Enum.partial ~total:Enum.total
 
     let register_string_tag tag =
-      register tag ~nullable:snd ~total:fst OString.(t,nullable)
+      register tag ~nullable:snd ~total:fst OString.(t,nullable);
+      def ("project_substitute_" ^ tagname tag)
+        C.(!!Project.t @-> !!Memory.t @-> string @->
+           returning !!Project.t)
+        (fun proj mem x -> Project.ML.substitute proj mem tag x)
 
     (* treat the weight tag specialy, do not generalize
        this function to all floats *)
