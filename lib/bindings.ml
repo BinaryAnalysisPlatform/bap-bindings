@@ -498,18 +498,53 @@ struct
       t
   end
 
-  module Regular = struct
-    module Bap = Regular
-    let instance (type t) (module T : Regular.S with type t = t) t =
+  module Data = struct
+    let foreign = Foreign.foreign
+
+    type window = unit C.ptr
+
+    let file : window C.typ = C.(ptr void)
+
+    let fwrite = foreign "fwrite"
+        C.(ptr void @-> size_t @-> size_t @-> file @-> returning size_t)
+
+    let size_t = Unsigned.Size_t.of_int
+
+
+    let buffer ptr len =
+      C.bigarray_of_ptr C.array1 len Bigarray.char ptr
+
+
+    let instance (type t) (module T : Data.S with type t = t) t =
       let name = Opaque.name t in
       let def fn = def (name ^ "_" ^ fn) in
-      let t = Opaque.total t in
-      def "to_string" C.(t @-> returning OString.t) T.to_string;
-      def "compare" C.(t @-> t @-> returning int) T.compare;
-      def "equal"   C.(t @-> t @-> returning bool) T.equal;
-      def "hash"    C.(t @-> returning int) T.hash
+      def "data_version" C.(void @-> returning OString.t) (fun () -> T.version);
+      def "data_size" C.(!!t @-> returning size_t)
+        (fun t -> size_t (T.size_in_bytes t));
+      def "copy" C.(!!t @-> ptr char @-> int @-> returning void)
+        (fun t ptr len -> T.blit_to_bigstring (buffer ptr len) t 0);
+      def "of_bytes" C.(!!t @-> ptr char @-> int @-> returning !?t)
+        (fun t ptr len ->
+           try Some (T.of_bigstring (buffer ptr len)) with exn -> None);
+      def "fwrite" C.(!!t @-> file @-> returning size_t)
+        (fun value file ->
+           let buf = T.to_bigstring value in
+           let len = Bigstring.length buf in
+           let beg = C.(bigarray_start array1 buf) in
+           fwrite C.(to_voidp beg) (size_t 1) (size_t len) file);
+      def "input" C.(string @-> returning !!t) (fun file -> T.Io.read file);
+      def "output" C.(string @-> !!t @-> returning void)
+        (fun file t -> T.Io.write file t);
+      def "set_reader" C.(string @-> returning void)
+        (fun name -> T.set_default_reader name);
+      def "set_writer" C.(string @-> returning void)
+        (fun name -> T.set_default_writer name);
+      def "set_printer" C.(string @-> returning void)
+        (fun name -> T.set_default_printer name);
+  end
 
-
+  module Regular = struct
+    module Bap = Regular
 
     module Make(Spec : sig
         val name : string
@@ -536,11 +571,13 @@ struct
           ~write:set_of_pset
           ~read:pset_of_set
 
-      let def fn typ impl =
-        def (name ^ "_" ^ fn) typ impl
+      let def fn  = def (name ^ "_" ^ fn);;
 
-      let () =
-        instance (module T) t;
+      Data.instance (module T) t;
+      def "to_string" C.(!!t @-> returning OString.t) T.to_string;
+      def "compare" C.(!!t @-> !!t @-> returning int) T.compare;
+      def "equal"   C.(!!t @-> !!t @-> returning bool) T.equal;
+      def "hash"    C.(!!t @-> returning int) T.hash
     end
   end
 

@@ -16,7 +16,9 @@ let generate dirname =
       (Cstubs_inverted.write_c ~prefix) stubs;
 
     fprintf (formatter_of_out_channel h_fd)
-      "#include <stdint.h>@\n%a"
+      "#include <stdint.h>
+       #include <stdlib.h>
+%a"
     (Cstubs_inverted.write_c_header ~prefix) stubs;
 
   end;
