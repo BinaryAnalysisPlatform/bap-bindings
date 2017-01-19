@@ -75,10 +75,65 @@ struct
   let def name = Internal.internal ("bap_" ^ name)
 
   module OString = struct
-    module Array = C.CArray
-    module Pool = Nativeint.Table
+    (*
+       Implementation details.
+       =======================
 
+
+       Value representation
+       --------------------
+
+       An OCaml string is copied to a CArray value, which is a
+       custom block that contains a pointer to a malloced buffer.
+       An explicit null character is added to the end of the array (so
+       the CArray is one character longer than the original string).
+
+       The CArray value is managed by the OCaml GC and is preserved
+       with the hash table (called managed), that maps pointers
+       (virtual memory addresses) to the CArrays.
+
+       A pointer to the mallocated buffer is returned to the C
+       side. When the `bap_release` function is called, a pointer
+       passed to the function is used to remove a corresponding entry
+       from the hashtable. Once it is removed, it should become
+       unreachable and the memory will be collected as soon, as the GC
+       comes to it.
+
+       Although the type is mostly used to pass string data from OCaml
+       to C, it maybe also used for the opposite side. We're not using
+       this direction right now, but the Ctypes interfaces requires us
+       to provide the implementation for the both sides. For
+       simplicity we are requiring that a pointer passed from the
+       C-side must be managed by the OString module. A runtime check
+       ensures this. If the value is managed, then it will be copied
+       to the string. In the general case we can remove this
+       constraint and allow the C side to pass a data ownership to our
+       side.
+
+
+       Performance overhead
+       --------------------
+
+       Since we can't pass a pointer to data that is managed by OCaml,
+       as the data can be moved by the GC, we have no other choices
+       other than copying the data from the OCaml arena to the C
+       (malloc) arena. So the performance cost is the cost of copying
+       the data (plus an allocation of few custom blocks - the managed
+       buffer itself, the nativeing pointer, and a few regular blocks,
+       including the fat pointer, and an entry in the managed table).
+
+       Although the performance implication will be also linear to the
+       size of the buffer, the constant factor can be reduced by using
+       Core's bigstrings instead of the CArray. Being bigarrays
+       underneath the hood, they also store their data in the malloc
+       arena, so we can safely pass a pointer to data. However, the
+       copying is implemented more efficiently with the `memcpy`
+       function, unlike a pure OCaml for-loop used for the
+       CArray.
+    *)
+    module Pool = Nativeint.Table
     let managed = Pool.create ~size:1024 ()
+    module Array = C.CArray
 
     let addr ptr =
       C.to_voidp ptr |>
@@ -103,7 +158,7 @@ struct
       match Hashtbl.find managed (addr ptr) with
       | None -> expect_managed ptr
       | Some arr ->
-        String.init (Array.length arr) ~f:(Array.get arr)
+        String.init (Array.length arr - 1) ~f:(Array.get arr)
 
     let write str =
       let len = String.length str + 1 in
@@ -112,11 +167,10 @@ struct
         arr.(i) <- str.[i];
       done;
       arr.(len - 1) <- '\x00';
-      let kind = Bigarray.char in
-      let barr = C.bigarray_of_array C.array1 kind arr in
-      let ptr = C.bigarray_start C.array1 barr in
-      Hashtbl.set managed ~key:(addr ptr) ~data:arr;
+      let ptr = Array.start arr in
+      Hashtbl.add_exn managed ~key:(addr ptr) ~data:arr;
       ptr
+
 
     let read_opt ptr =
       if C.is_null ptr then None else Some (read ptr)
@@ -260,6 +314,11 @@ struct
     let set err = current_error := Some err
     let clear () = current_error := None
 
+    let failf fmt = Format.kasprintf (fun str ->
+        let err = Error.of_string str in
+        set err;
+        Error err) fmt
+
     let lift x = match x with
       | Ok x -> Some x
       | Error err -> set err; None
@@ -326,7 +385,7 @@ struct
   end
 
   module Seq = struct
-    module ML = Seq
+    module Bap = Seq
     module Iter = struct
       type 'a t = {
         seq : 'a seq;
@@ -440,7 +499,7 @@ struct
   end
 
   module Regular = struct
-    module ML = Regular
+    module Bap = Regular
     let instance (type t) (module T : Regular.S with type t = t) t =
       let name = Opaque.name t in
       let def fn = def (name ^ "_" ^ fn) in
@@ -470,8 +529,8 @@ struct
       let seq = Seq.instance (module T) t
       let set = Set.instance (module T) t seq
       let list = Opaque.view seq
-          ~write:Seq.ML.of_list
-          ~read:Seq.ML.to_list
+          ~write:Seq.Bap.of_list
+          ~read:Seq.Bap.to_list
 
       let pset = Opaque.view set
           ~write:set_of_pset
@@ -486,7 +545,7 @@ struct
   end
 
   module Value = struct
-    module ML = Value
+    module Bap = Value
     type t = value
     include Regular.Make(struct
         let name = "value"
@@ -683,7 +742,7 @@ struct
   end
 
   module Var = struct
-    module ML = Var
+    module Bap = Var
     include Regular.Make(struct
         type t = var
         let name = "var"
@@ -957,15 +1016,15 @@ struct
       | _ -> None
 
     let stmts = function
-      | Bil.While (_,x) -> Some (Seq.ML.of_list x)
+      | Bil.While (_,x) -> Some (Seq.Bap.of_list x)
       | _ -> None
 
     let true_stmts = function
-      | Bil.If (_,x,_) -> Some (Seq.ML.of_list x)
+      | Bil.If (_,x,_) -> Some (Seq.Bap.of_list x)
       | _ -> None
 
     let false_stmts = function
-      | Bil.If (_,_,x) -> Some (Seq.ML.of_list x)
+      | Bil.If (_,_,x) -> Some (Seq.Bap.of_list x)
       | _ -> None
 
     let cpuexn = function
@@ -989,7 +1048,7 @@ struct
       def "create_jmp" C.(!!Exp.t @-> returning !!t) Bil.jmp;
       def "create_special" C.(string @-> returning !!t) Bil.special;
       def "create_if" C.(!!Exp.t @-> !!seq @-> !!seq @-> returning !!t)
-        (fun exp xs ys -> Bil.if_ exp (Seq.ML.to_list xs) (Seq.ML.to_list ys));
+        (fun exp xs ys -> Bil.if_ exp (Seq.Bap.to_list xs) (Seq.Bap.to_list ys));
       def "create_cpuexn" C.(int @-> returning !!t) Bil.cpuexn;
       def "is_referenced" C.(!!Var.t @-> !!t @-> returning bool)
         Stmt.is_referenced;
@@ -1242,7 +1301,7 @@ struct
       Image.memory_of_segment;
     def "is_symbol_contiguous"
       C.(!!t @-> !!Symbol.t @-> returning bool)
-      (fun img sym -> Seq.ML.is_empty (snd (Image.memory_of_symbol img sym)));
+      (fun img sym -> Seq.Bap.is_empty (snd (Image.memory_of_symbol img sym)));
     def "memory_of_contiguous_symbol"
       C.(!!t @-> !!Symbol.t @-> returning !!Memory.t)
       (fun img sym -> fst (Image.memory_of_symbol img sym));
@@ -1264,7 +1323,7 @@ struct
     def "asm" C.(!!t @-> returning OString.t) Insn.asm;
     def "bil" C.(!!t @-> returning !!Bil.t) Insn.bil;
     def "ops" C.(!!t @-> returning !!Op.seq)
-      (fun insn -> Seq.ML.of_array (Insn.ops insn));
+      (fun insn -> Seq.Bap.of_array (Insn.ops insn));
     def "ops_length" C.(!!t @-> returning int)
       (fun insn -> Array.length (Insn.ops insn));
     def "ops_nth" C.(!!t @-> int @-> returning !?Op.t)
@@ -1321,7 +1380,7 @@ struct
           C.structure (namespace ^ "_visitor")
 
         let (%:) name typ =
-          C.field params (namespace ^ "_" ^ name) (fn_opt typ)
+          C.field params name (fn_opt typ)
 
         let start_tree =
           "start_tree" %: C.(n @-> s @-> returning void)
@@ -1439,8 +1498,8 @@ struct
     let t : t opaque = Opaque.newtype "code"
     let seq : t seq opaque = Seq.instance (module T) t;;
     let list = Opaque.view seq
-          ~write:Seq.ML.of_list
-          ~read:Seq.ML.to_list;;
+          ~write:Seq.Bap.of_list
+          ~read:Seq.Bap.to_list;;
     def "code_mem" C.(!!t @-> returning !!Memory.t) fst;
     def "code_insn" C.(!!t @-> returning !!Insn.t) snd;
   end
@@ -1577,11 +1636,11 @@ struct
     def "merge" C.(!!t @-> !!t @-> returning !!t) Disasm.merge;
     def "code" C.(!!t @-> returning !!Code.seq) Disasm.insns;
     def "insns" C.(!!t @-> returning !!Insn.seq)
-      Seq.ML.(fun d -> Disasm.insns d >>| snd);
+      Seq.Bap.(fun d -> Disasm.insns d >>| snd);
   end
 
   module Term = struct
-    module ML = Term
+    module Bap = Term
     type enum =
         Top | Sub | Arg | Blk | Def | Phi | Jmp
     [@@deriving sexp, enumerate]
@@ -1620,7 +1679,7 @@ struct
 
     module type Expressible = sig
       type t
-      val free_vars : t -> Var.ML.Set.t
+      val free_vars : t -> Var.Bap.Set.t
       val map_exp : t -> f:(exp -> exp) -> t
       val substitute : t -> exp -> exp -> t
     end
@@ -1678,7 +1737,7 @@ struct
     module Make(Spec : sig
         type t
         val name : string
-        module T : Regular.ML.S with type t = t term
+        module T : Regular.Bap.S with type t = t term
       end) = struct
       include Regular.Make(Spec);;
       Opaque.instanceof ~base:term t;
@@ -1720,7 +1779,7 @@ struct
 
 
   module Call = struct
-    module ML = Call
+    module Bap = Call
     include Regular.Make(struct
         let name = "call"
         module T = Call
@@ -1776,7 +1835,7 @@ struct
       | Int _ -> `Int
 
     let target jmp = match Jmp.kind jmp with
-      | Call call -> Some (Call.ML.target call)
+      | Call call -> Some (Call.Bap.target call)
       | Goto dst | Ret dst -> Some dst
       | _ -> None
 
@@ -1845,9 +1904,9 @@ struct
     def "select_or_unknown" C.(!!t @-> !!Tid.t @-> returning !!Exp.t) Phi.select_or_unknown;
     def "remove" C.(!!t @-> !!Tid.t @-> returning !!t) Phi.remove;
     def "incomming" C.(!!t @-> returning !!Tid.seq)
-      Seq.ML.(fun t -> Phi.values t >>| fst);
+      Seq.Bap.(fun t -> Phi.values t >>| fst);
     def "exps" C.(!!t @-> returning !!Exp.seq)
-      Seq.ML.(fun t -> Phi.values t >>| snd)
+      Seq.Bap.(fun t -> Phi.values t >>| snd)
   end
 
   module Blk = struct
@@ -1908,7 +1967,7 @@ struct
   end
 
   module Arg = struct
-    module ML = Arg
+    module Bap = Arg
     include Term.Make(struct
         type t = arg and p = sub
         let name = "arg" and cls = arg_t
@@ -1976,7 +2035,7 @@ struct
   end
 
   module Sub = struct
-    module ML = Sub
+    module Bap = Sub
     include Term.Make(struct
         type t = sub and p = program
         let name = "sub" and cls = sub_t
@@ -2033,8 +2092,8 @@ struct
 
       let seq = Seq.instance (module T) t;;
       let list = Opaque.view seq
-          ~write:Seq.ML.of_list
-          ~read:Seq.ML.to_list;;
+          ~write:Seq.Bap.of_list
+          ~read:Seq.Bap.to_list;;
 
       def "symtab_fn_name" C.(!!t @-> returning OString.t) fst3;
       def "symtab_fn_entry" C.(!!t @-> returning !!Block.t) snd3;
@@ -2112,9 +2171,10 @@ struct
   end
 
   module Project = struct
-    module ML = Project
+    module Bap = Project
     let t : project opaque = Opaque.newtype "project"
     let proj_t = !!t
+    let proj_opt = !?t
 
     let def name typ impl =
       def ("project_" ^ name) typ impl
@@ -2201,6 +2261,63 @@ struct
     def "with_storage"
       C.(proj_t @-> !!Value.Dict.t @-> returning proj_t)
       Project.with_storage;
+
+    module Pass = struct
+      type spec = Spec
+      let pass : spec C.structure ctype =
+        C.structure "bap_pass_t"
+
+      let autorun = C.field pass "autorun" C.bool
+      let runonce = C.field pass "runonce" C.bool
+      let deps = C.field pass "deps" C.(ptr string_opt)
+      let name = C.field pass "name" C.(string_opt)
+      let run = C.field pass "run" C.(fn (proj_t @-> ptr void @-> returning proj_opt));;
+      C.seal pass;;
+      Internal.structure pass;;
+
+      let list_of_nullterminated_array p =
+        let rec loop acc p =
+          if C.is_null p then List.rev acc
+          else match C.(!@p) with
+            | None -> List.rev acc
+            | Some s -> loop C.(s :: acc) C.(p +@ 1) in
+        loop [] p
+
+      let run_pass proj name =
+        match Project.find_pass name with
+        | None -> Error.failf "Failed to find pass: %s" name
+        | Some pass -> match Project.Pass.run pass proj with
+          | Ok proj -> Ok proj
+          | Error (Project.Pass.Unsat_dep (p,n)) ->
+            Error.failf "Dependency `%s' of pass `%s' is not loaded"
+              n (Project.Pass.name p)
+          | Error (Project.Pass.Runtime_error (p, Exn.Reraised (bt,exn))) ->
+            Error.failf "Pass `%s' failed at runtime with: %a\nBacktrace:\n%s"
+              (Project.Pass.name p) Exn.pp exn bt
+          | Error (Project.Pass.Runtime_error (p,exn)) ->
+              Error.failf "Pass `%s' failed at runtime with: %a\n"
+              (Project.Pass.name p) Exn.pp exn
+
+
+      let def fn = def ("pass_" ^ fn);;
+
+      def "run" C.(proj_t @-> string @-> returning proj_opt)
+        (Error.lift2 run_pass);
+
+      def "register" C.(ptr pass @-> ptr void @-> returning void)
+        begin fun p data ->
+          let get f = C.getf C.(!@p) f in
+          let deps = list_of_nullterminated_array (get deps) in
+          let f = get run in
+          Project.register_pass
+            ~autorun:(get autorun)
+            ~runonce:(get runonce)
+            ?name:(get name)
+            ~deps (fun p -> match f p data with
+                | None -> p
+                | Some p -> p)
+        end
+    end
   end
 
 
@@ -2208,10 +2325,10 @@ struct
     module type Dict = sig
       type t
       val t   : t opaque
-      val get : 'a Value.ML.tag -> t -> 'a option
-      val set : 'a Value.ML.tag -> t -> 'a -> t
-      val has : 'a Value.ML.tag -> t -> bool
-      val rem : 'a Value.ML.tag -> t -> t
+      val get : 'a Value.Bap.tag -> t -> 'a option
+      val set : 'a Value.Bap.tag -> t -> 'a -> t
+      val has : 'a Value.Bap.tag -> t -> bool
+      val rem : 'a Value.Bap.tag -> t -> t
     end
 
     let register_dict_ops (type t)
@@ -2237,24 +2354,24 @@ struct
     end
 
     let tagname tag =
-      Value.ML.Tag.name tag |>
+      Value.Bap.Tag.name tag |>
       Stringext.replace_all ~pattern:"-" ~with_:"_"
 
     let register (type a)
-        ~total ~nullable (tag : a Value.ML.tag) a =
+        ~total ~nullable (tag : a Value.Bap.tag) a =
       let name = tagname tag in
       let t = Value.t in
       let a = total a and a_opt = nullable a in
       let module Value_interface = struct
         let def fn = def ("value_" ^ fn ^ "_" ^ name);;
-        def "create" C.(a @-> returning !!t) (Value.ML.create tag);
-        def "get" C.(!!t @-> returning a_opt) (Value.ML.get tag);
-        def "is" C.(!!t @-> returning bool) (Value.ML.is tag);
+        def "create" C.(a @-> returning !!t) (Value.Bap.create tag);
+        def "get" C.(!!t @-> returning a_opt) (Value.Bap.get tag);
+        def "is" C.(!!t @-> returning bool) (Value.Bap.is tag);
       end in
       let module Memory_interface = struct
         def ("project_memory_tag_with_" ^ name)
           C.(!!Project.t @-> !!Memory.t @-> a @-> returning !!Project.t)
-          (fun proj mem v -> Project.ML.tag_memory proj mem tag v)
+          (fun proj mem v -> Project.Bap.tag_memory proj mem tag v)
       end in
       let dict m ns = register_dict_ops m (ns name) a a_opt tag in
       dict (module Value.Dict) NS.dict;
@@ -2262,11 +2379,20 @@ struct
       dict (module Project.Attr) NS.proj;
       ()
 
-    let register_void_tag (tag : unit Value.ML.tag) =
+    let register_void_tag (tag : unit Value.Bap.tag) =
       let name = tagname tag in
-      let def fn = def (fn ^ "_" ^ name) in
-      def "create" C.(void @-> returning !!Value.t) (Value.ML.create tag);
-      def "is" C.(!!Value.t @-> returning bool) (Value.ML.is tag);
+      let module Value_interface = struct
+        let def fn = def ("value_" ^ fn ^ "_" ^ name);;
+        def "create" C.(void @-> returning !!Value.t)
+          (Value.Bap.create tag);
+        def "is" C.(!!Value.t @-> returning bool)
+          (Value.Bap.is tag);
+      end in
+      let module Memory_interface = struct
+        def ("project_memory_tag_with_" ^ name)
+          C.(!!Project.t @-> !!Memory.t @-> returning !!Project.t)
+          (fun proj mem -> Project.Bap.tag_memory proj mem tag ())
+      end in
       let dict m ns =
         register_void_dict_ops m (ns name) tag in
       dict (module Value.Dict) NS.dict;
@@ -2284,7 +2410,7 @@ struct
       def ("project_substitute_" ^ tagname tag)
         C.(!!Project.t @-> !!Memory.t @-> string @->
            returning !!Project.t)
-        (fun proj mem x -> Project.ML.substitute proj mem tag x)
+        (fun proj mem x -> Project.Bap.substitute proj mem tag x)
 
     (* treat the weight tag specialy, do not generalize
        this function to all floats *)
@@ -2308,25 +2434,25 @@ struct
       register_enum_tag background Color.t;
       register_opaque_tag address Word.t;
       register_opaque_tag Disasm.insn Insn.t;
-      register_opaque_tag Term.ML.origin Tid.t;
-      register_void_tag Term.ML.synthetic;
-      register_void_tag Term.ML.live;
-      register_void_tag Term.ML.dead;
-      register_void_tag Term.ML.visited;
-      register_opaque_tag Term.ML.precondition Exp.t;
-      register_opaque_tag Term.ML.invariant Exp.t;
-      (* register_string_tag Sub.ML.aliases; *)
-      register_void_tag Sub.ML.const;
-      register_void_tag Sub.ML.stub;
-      register_void_tag Sub.ML.extern;
-      register_void_tag Sub.ML.leaf;
-      register_void_tag Sub.ML.malloc;
-      register_void_tag Sub.ML.noreturn;
-      register_void_tag Sub.ML.returns_twice;
-      register_void_tag Sub.ML.nothrow;
-      register_void_tag Arg.ML.warn_unused;
-      register_void_tag Arg.ML.alloc_size;
-      register_void_tag Arg.ML.nonnull;
-      register_string_tag Arg.ML.format;
+      register_opaque_tag Term.Bap.origin Tid.t;
+      register_void_tag Term.Bap.synthetic;
+      register_void_tag Term.Bap.live;
+      register_void_tag Term.Bap.dead;
+      register_void_tag Term.Bap.visited;
+      register_opaque_tag Term.Bap.precondition Exp.t;
+      register_opaque_tag Term.Bap.invariant Exp.t;
+      (* register_string_tag Sub.Bap.aliases; *)
+      register_void_tag Sub.Bap.const;
+      register_void_tag Sub.Bap.stub;
+      register_void_tag Sub.Bap.extern;
+      register_void_tag Sub.Bap.leaf;
+      register_void_tag Sub.Bap.malloc;
+      register_void_tag Sub.Bap.noreturn;
+      register_void_tag Sub.Bap.returns_twice;
+      register_void_tag Sub.Bap.nothrow;
+      register_void_tag Arg.Bap.warn_unused;
+      register_void_tag Arg.Bap.alloc_size;
+      register_void_tag Arg.Bap.nonnull;
+      register_string_tag Arg.Bap.format;
   end
 end
