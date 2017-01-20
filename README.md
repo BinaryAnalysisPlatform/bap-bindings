@@ -34,11 +34,10 @@ suggested:
 
 * BAP 1.x.x
 * OCaml 4.03+ with PIC runtime
-  (usually available by default, if a compiler is from OPAM)
 * GCC
 * Patience (it takes some time to generate the bindings)
 
-BAP should be installed, and `_pic` runtime shou
+The PIC runtime is usually installed autotmatically with OCaml (at least in OPAM).
 
 ## Compilation
 
