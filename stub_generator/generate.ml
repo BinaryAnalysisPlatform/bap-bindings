@@ -18,6 +18,8 @@ let generate dirname =
     fprintf (formatter_of_out_channel h_fd)
       "#include <stdint.h>
        #include <stdlib.h>
+
+      void bap_init(int argc, const char *argv[]);
 %a"
     (Cstubs_inverted.write_c_header ~prefix) stubs;
 

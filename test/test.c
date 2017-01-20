@@ -6,10 +6,6 @@
 
 #include "bap.h"
 
-
-int bap_standalone_init(int, const char **);
-
-
 void print_sub_names(bap_sub_seq_t *subs) {
     bap_sub_seq_iterator_t *iter = bap_sub_seq_iterator_create(subs);
     while (bap_sub_seq_iterator_has_next(iter)) {
@@ -70,18 +66,19 @@ bap_project_t *dead_taint_analysis(bap_project_t *proj, void *unused) {
 
 
 int main(int argc, const char **argv) {
-    int res = bap_standalone_init(argc, argv);
+    bap_init(argc, argv);
+    int res = bap_load_plugins();
     if (res < 0) {
-        printf("Failed to initialize BAP\n");
+        printf("Failed to load BAP plugins\n");
         return 1;
     }
 
     printf("BAP.%s was succesfully initialized\n", bap_version());
 
     struct bap_project_parameters_t params = {0};
-    params.bap_project_rooter = bap_rooter_factory_find("byteweight");
-
-    if (params.bap_project_rooter == NULL) {
+    params.rooter = bap_rooter_factory_find("byteweight");
+    params.symbolizer = bap_symbolizer_factory_find("objdump");
+    if (params.rooter == NULL) {
         printf("Warning: byteweight is not installed\n");
     }
 
@@ -94,14 +91,14 @@ int main(int argc, const char **argv) {
     }
     printf("created a project\n");
 
-    bap_arch_tag arch = bap_project_arch(proj);
+    bap_arch_t arch = bap_project_arch(proj);
     char *name = bap_arch_to_string(arch);
 
     printf("Architecture: %s\n", name);
 
     bap_program_t *prog = bap_project_program(proj);
-    char *progstr = bap_program_to_string(prog);
-    printf("Program:\n%s\n", progstr);
+    printf("Program:\n");
+    bap_program_print(prog);
 
     bap_sub_seq_t *subs = bap_program_subs(prog);
     print_sub_names(subs);
@@ -120,7 +117,6 @@ int main(int argc, const char **argv) {
     printf("That's all folks\n"); fflush(stdout);
 
     bap_release(final);
-    bap_release(progstr);
     bap_release(proj);
     bap_release(name);
     return 0;

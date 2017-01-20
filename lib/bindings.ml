@@ -13,6 +13,15 @@ let obj_addr x =
 
 let name = None
 
+let list_of_nullterminated_array p =
+  let rec loop acc p =
+    if C.is_null p then List.rev acc
+    else match C.(!@p) with
+      | None -> List.rev acc
+      | Some s -> loop C.(s :: acc) C.(p +@ 1) in
+  loop [] p
+
+
 module Make( Internal : Cstubs_inverted.INTERNAL) =
 struct
 
@@ -37,15 +46,18 @@ struct
       partial : 'a option C.typ;
     }
 
+
     let define ?(invalid="invalid")
         ?(first=0) (type t) (module E: T with type t = t) name =
       assert (first >= 0);
+      let compare x y = E.compare y x in
       let enum = Array.of_list E.all in
-      Array.sort enum ~cmp:E.compare;
-      let read i = Array.get enum (i - first) in
+      Array.sort enum ~cmp:compare;
+      let read i =
+        Array.get enum (i - first) in
       let write t =
         match
-          Array.binary_search ~compare:E.compare enum `First_equal_to t
+          Array.binary_search ~compare enum `First_equal_to t
         with None -> assert false
            | Some x -> x + first in
       let read_opt i = if i = -1  then None else Some (read i) in
@@ -54,9 +66,9 @@ struct
         | Some x -> write x in
       let pref = String.uppercase ("bap_" ^ name) in
       let view read write =
-        C.view ~format_typ:(fun k ppf -> fprintf ppf "enum %s_tag%t" name k)
+        C.view ~format_typ:(fun k ppf -> fprintf ppf "enum bap_%s_t%t" name k)
           ~read ~write C.int in
-      let cases = List.mapi E.all ~f:(fun i x ->
+      let cases = Array.to_list enum |> List.mapi  ~f:(fun i x ->
           let name = String.uppercase (Sexp.to_string (E.sexp_of_t x)) in
           pref ^ "_" ^ name, Int64.of_int (first + i)) in
       let invalid = String.uppercase invalid in
@@ -64,7 +76,7 @@ struct
       let t = view read write in
       let partial = view read_opt write_opt in
       Internal.enum cases t;
-      Internal.typedef t (name ^ "_tag");
+      Internal.typedef t ("bap_" ^ name ^ "_t");
       {total = t; partial}
 
     let total t = t.total
@@ -303,7 +315,7 @@ struct
   let () =
     def "release" C.(ptr void @-> returning void) release
 
-  let standalone_init argc argv =
+  let load_plugins () =
     try Plugins.run (); 0 with _ -> 1
 
   let version () = Config.version
@@ -341,14 +353,10 @@ struct
 
   let () =
     def "version" C.(void @-> returning OString.t) version;
-    def "_standalone_init" C.(int @-> ptr string @-> returning int)
-      standalone_init
-
+    def "load_plugins" C.(void @-> returning int) load_plugins
 
   let fn = Foreign.funptr
   let fn_opt = Foreign.funptr_opt
-
-
 
   module Container = struct
     module type S0 = Container.S0
@@ -498,22 +506,68 @@ struct
       t
   end
 
-  module Data = struct
-    let foreign = Foreign.foreign
+  module Stdio = struct
+    open Foreign
+    type file = unit C.ptr
 
-    type window = unit C.ptr
+    type io = {
+      stdin : file;
+      stdout : file;
+      stderr : file;
+    } [@@deriving fields]
 
-    let file : window C.typ = C.(ptr void)
+    let io = ref None
+
+    let file : file C.typ = C.(ptr void)
+
+    let get field = match !io with
+      | None ->
+        invalid_arg "BAP is not initialized.\n\
+                     Please, call bap_init before any call to BAP functions"
+      | Some io -> field io
+
+    let stdin ()  : file = get stdin
+    let stdout () : file = get stdout
+    let stderr () : file = get stderr
+
+
 
     let fwrite = foreign "fwrite"
         C.(ptr void @-> size_t @-> size_t @-> file @-> returning size_t)
 
-    let size_t = Unsigned.Size_t.of_int
+    let fputs = foreign "fputs"
+        C.(string @-> file @-> returning int);;
+
+    def "_stdio_init" C.(file @-> file @-> file @-> returning void)
+      (fun stdin stdout stderr -> io := Some {stdin; stdout; stderr})
+  end
+
+  let size_t = Unsigned.Size_t.of_int
+
+  module Printable = struct
+    let instance (type t)
+        (module T : Printable.S with type t = t) t =
+      let name = Opaque.name t in
+      let def fn = def (name ^ "_" ^ fn) in
+      def "to_string"
+        C.(!!t @-> returning OString.t) T.to_string;
+      def "fprint"
+        C.(!!t @-> Stdio.file @-> returning int)
+        (fun t file -> Stdio.fputs (T.to_string t) file);
+      def "print"
+        C.(!!t @-> returning int)
+        (fun t -> Stdio.fputs (T.to_string t) (Stdio.stdout ()));
+      def "eprint"
+        C.(!!t @-> returning int)
+        (fun t -> Stdio.fputs (T.to_string t) (Stdio.stderr ()));
+  end
+
+  module Data = struct
+
 
 
     let buffer ptr len =
       C.bigarray_of_ptr C.array1 len Bigarray.char ptr
-
 
     let instance (type t) (module T : Data.S with type t = t) t =
       let name = Opaque.name t in
@@ -526,12 +580,12 @@ struct
       def "of_bytes" C.(!!t @-> ptr char @-> int @-> returning !?t)
         (fun t ptr len ->
            try Some (T.of_bigstring (buffer ptr len)) with exn -> None);
-      def "fwrite" C.(!!t @-> file @-> returning size_t)
+      def "fwrite" C.(!!t @-> Stdio.file @-> returning size_t)
         (fun value file ->
            let buf = T.to_bigstring value in
            let len = Bigstring.length buf in
            let beg = C.(bigarray_start array1 buf) in
-           fwrite C.(to_voidp beg) (size_t 1) (size_t len) file);
+           Stdio.fwrite C.(to_voidp beg) (size_t 1) (size_t len) file);
       def "input" C.(string @-> returning !!t) (fun file -> T.Io.read file);
       def "output" C.(string @-> !!t @-> returning void)
         (fun file t -> T.Io.write file t);
@@ -574,7 +628,7 @@ struct
       let def fn  = def (name ^ "_" ^ fn);;
 
       Data.instance (module T) t;
-      def "to_string" C.(!!t @-> returning OString.t) T.to_string;
+      Printable.instance (module T) t;
       def "compare" C.(!!t @-> !!t @-> returning int) T.compare;
       def "equal"   C.(!!t @-> !!t @-> returning bool) T.equal;
       def "hash"    C.(!!t @-> returning int) T.hash
@@ -635,7 +689,15 @@ struct
       type t = Word.endian =
         | LittleEndian
         | BigEndian
-      [@@deriving compare, enumerate, sexp]
+      [@@deriving compare, enumerate]
+      let sexp_of_t = function
+        | LittleEndian -> Sexp.Atom "little"
+        | BigEndian -> Sexp.Atom "big"
+
+      let t_of_sexp = function
+        | Sexp.Atom "little" -> LittleEndian
+        | Sexp.Atom "big" -> BigEndian
+        | _ -> invalid_arg "endian_of_sexp: expected big | little"
     end
     let enum = Enum.define (module T) "endian"
     let t = Enum.total enum
@@ -718,7 +780,7 @@ struct
 
 
   module Arch = struct
-    let t = Enum.define (module Arch) "bap_arch"
+    let t = Enum.define (module Arch) "arch"
     let total = Enum.total t
     let partial = Enum.partial t
 
@@ -742,7 +804,7 @@ struct
       type t = [`Imm | `Mem] [@@deriving enumerate, sexp, compare]
     end
 
-    let enum = Enum.define (module Tag) "type"
+    let enum = Enum.define (module Tag) "type_tag"
     let tag_t = Enum.total enum
 
     let to_tag = function
@@ -857,7 +919,7 @@ struct
       [@@deriving enumerate, compare, sexp]
     end
 
-    let tag = Enum.define (module Tag) "exp"
+    let tag = Enum.define (module Tag) "exp_tag"
     let cast = Enum.define (module Cast) "cast"
     let binop = Enum.define (module Binop) "binop"
     let unop = Enum.define (module Unop) "unop"
@@ -1030,7 +1092,7 @@ struct
       [@@deriving compare, sexp, enumerate]
     end
 
-    let tag = Enum.define (module Tag) "stmt"
+    let tag = Enum.define (module Tag) "stmt_tag"
     let tag_t = Enum.total tag
 
     let to_tag = function
@@ -1100,7 +1162,6 @@ struct
         let name = "tid"
         module T = Tid
       end)
-    let def x = def ("tid_" ^ x)
 
     let () =
       def "create" C.(void @-> returning !!t) Tid.create;
@@ -1112,28 +1173,39 @@ struct
 
   module Bil = struct
     let t  = Stmt.list
-    let def fn = def ("bil_" ^ fn)
 
-    let () =
-      def "is_referenced"
-        C.(!!Var.t @-> !!t @-> returning bool)
-        Bil.is_referenced;
-      def "is_assigned"
-        C.(!!Var.t @-> !!t @-> returning bool)
-        (fun var bil -> Bil.is_assigned var bil);
-      def "is_strictly_assigned"
-        C.(!!Var.t @-> !!t @-> returning bool)
-        (fun var bil -> Bil.is_assigned ~strict:true var bil);
-      def "substitute"
-        C.(!!Exp.t @-> !!Exp.t @-> !!t @-> returning !!t)
-        Bil.substitute;
-      def "substitute_var"
-        C.(!!Var.t @-> !!Exp.t @-> !!t @-> returning !!t)
-        Bil.substitute_var;
-      def "free_vars"
-        C.(!!t @-> returning !!Var.pset) Bil.free_vars;
-      def "fold_consts" C.(!!t @-> returning !!t)
-        Bil.(fixpoint fold_consts)
+    let def fn = def ("bil_" ^ fn);;
+
+    Internal.typedef !!t "bap_bil_t";;
+
+    Data.instance (module Bil) t;
+    Printable.instance (module Bil) t;
+
+    def "is_referenced"
+      C.(!!Var.t @-> !!t @-> returning bool)
+      Bil.is_referenced;
+
+    def "is_assigned"
+      C.(!!Var.t @-> !!t @-> returning bool)
+      (fun var bil -> Bil.is_assigned var bil);
+
+    def "is_strictly_assigned"
+      C.(!!Var.t @-> !!t @-> returning bool)
+      (fun var bil -> Bil.is_assigned ~strict:true var bil);
+
+    def "substitute"
+      C.(!!Exp.t @-> !!Exp.t @-> !!t @-> returning !!t)
+      Bil.substitute;
+
+    def "substitute_var"
+      C.(!!Var.t @-> !!Exp.t @-> !!t @-> returning !!t)
+      Bil.substitute_var;
+
+    def "free_vars"
+      C.(!!t @-> returning !!Var.pset) Bil.free_vars;
+
+    def "fold_consts" C.(!!t @-> returning !!t)
+      Bil.(fixpoint fold_consts)
   end
 
   module Reg = struct
@@ -1153,7 +1225,7 @@ struct
       [@@deriving enumerate, compare, sexp]
     end
 
-    let enum = Enum.define (module Tag) "op"
+    let enum = Enum.define (module Tag) "op_tag"
     let tag = Enum.total enum
 
     let to_tag = function
@@ -1270,7 +1342,8 @@ struct
       def "contains" C.(!!t @-> !!Word.t @-> returning bool)
         Memmap.contains;
       def "lookup" C.(!!t @-> !!Word.t @-> returning !!Binding.seq)
-        Memmap.lookup
+        Memmap.lookup;
+      def "enum" C.(!!t @-> returning !!Binding.seq) Memmap.to_sequence;
     end
     module Value = Make(Value)
     module Unit = Make(struct
@@ -1279,7 +1352,7 @@ struct
       end)
   end
   module Image = struct
-
+    module Bap = Image
     module Segment = struct
       module Seg = Image.Segment
       include Regular.Make(struct
@@ -1313,6 +1386,8 @@ struct
       | None -> None
       | Some (t,warns) -> warnings := warns; Some t
 
+
+    let def fn = def ("image_" ^ fn)
     ;;
 
     def "create" C.(string @-> string_opt @-> returning !?t)
@@ -1348,6 +1423,10 @@ struct
     def "segment_of_symbol"
       C.(!!t @-> !!Symbol.t @-> returning !!Segment.t)
       Image.segment_of_symbol;
+    def "segments" C.(!!t @-> returning !!Segment.seq)
+      (fun img -> Image.segments img |> Table.elements);
+    def "symbols" C.(!!t @-> returning !!Symbol.seq)
+      (fun img -> Image.symbols img |> Table.elements);
   end
 
   module Insn = struct
@@ -1599,15 +1678,18 @@ struct
   end
 
   module Brancher = struct
-    let t : brancher opaque = Opaque.newtype "brancher"
+    let t : brancher opaque = Opaque.newtype "brancher";;
+    Source.factory (module Brancher.Factory) Source.brancher "brancher"
   end
 
   module Symbolizer = struct
-    let t : symbolizer opaque = Opaque.newtype "symbolizer"
+    let t : symbolizer opaque = Opaque.newtype "symbolizer";;
+    Source.factory (module Symbolizer.Factory) Source.symbolizer "symbolizer"
   end
 
   module Reconstructor = struct
-    let t : reconstructor opaque = Opaque.newtype "reconstructor"
+    let t : reconstructor opaque = Opaque.newtype "reconstructor";;
+    Source.factory (module Reconstructor.Factory) Source.reconstructor "reconstructor"
   end
 
   module Disasm = struct
@@ -1788,7 +1870,7 @@ struct
       [@@deriving enumerate, sexp, compare]
     end
 
-    let tag = Enum.define (module Tag) "label"
+    let tag = Enum.define (module Tag) "label_tag"
     let tag_t = Enum.total tag
     let t : label opaque = Opaque.newtype "label"
 
@@ -2222,7 +2304,7 @@ struct
       C.structure "bap_project_parameters_t"
 
     let params_field name typ =
-      C.field params ("bap_project_" ^ name) typ
+      C.field params name typ
 
     let rooter_p = params_field "rooter" !?Source.rooter
     let brancher_p = params_field "brancher" !?Source.brancher
@@ -2271,7 +2353,7 @@ struct
         input
     ;;
 
-
+    Data.instance (module Project) t;
 
     def "create" C.(!!Input.t @-> ptr params @-> returning !?t)
       (Error.lift2 create);
@@ -2311,14 +2393,6 @@ struct
       let run = C.field pass "run" C.(fn (proj_t @-> ptr void @-> returning proj_opt));;
       C.seal pass;;
       Internal.structure pass;;
-
-      let list_of_nullterminated_array p =
-        let rec loop acc p =
-          if C.is_null p then List.rev acc
-          else match C.(!@p) with
-            | None -> List.rev acc
-            | Some s -> loop C.(s :: acc) C.(p +@ 1) in
-        loop [] p
 
       let run_pass proj name =
         match Project.find_pass name with
@@ -2491,5 +2565,8 @@ struct
       register_void_tag Arg.Bap.alloc_size;
       register_void_tag Arg.Bap.nonnull;
       register_string_tag Arg.Bap.format;
+      register_opaque_tag Image.Bap.segment Image.Segment.t;
+      register_string_tag Image.Bap.section;
+      register_string_tag Image.Bap.symbol;
   end
 end

@@ -1,9 +1,10 @@
+#include <stdio.h>
 #include <caml/callback.h>
 
-int bap__standalone_init(int, const char **);
+void bap__stdio_init(FILE *, FILE *, FILE *);
 
-void bap_standalone_init(int argc, const char **argv)
+void bap_init(int argc, const char **argv)
 {
     caml_startup((char **)argv);
-    bap__standalone_init(argc, argv);
+    bap__stdio_init(stdin, stdout, stderr);
 }
