@@ -1,12 +1,19 @@
 # @configure_input@
-BUILDDIR=_build
+LIBRARY=@LIBRARY@
+BUILDDIR=_build/$(LIBRARY)
 prefix=@prefix@
 exec_prefix=@exec_prefix@
 INSTALL_PROGRAM=install
-VPATH=$(BUILDDIR)
-OCAMLDIR=$(shell ocamlopt -where)
+VPATH=$(BUILDDIR):$(LIBRARY)
+OCAMLFIND=@OCAMLFIND@
+OCAMLOPT=$(OCAMLFIND) opt
+OCAMLDIR=@OCAMLDIR@
+OSTYPE=@OSTYPE@
+SYSTEM=@SYSTEM@
+EXTDLL=@EXTDLL@
+OCAMLCC=@OCAMLCC@
 $(shell mkdir -p $(BUILDDIR) $(BUILDDIR)/stub $(BUILDDIR)/lib $(BUILDDIR)/stub_generator $(BUILDDIR)/test $(BUILDDIR)/generated)
-PACKAGES=bap,bap.plugins,ctypes.stubs,ctypes.foreign,findlib.dynload
+PACKAGES=$(LIBRARY),bap.plugins,ctypes.stubs,ctypes.foreign,findlib.dynload
 
 BINDINGS=$(BUILDDIR)/lib/bindings.cmx
 
@@ -16,21 +23,17 @@ GENERATOR_FILES=$(BINDINGS)				\
 
 # The files from which we'll build a shared library.
 LIBFILES=$(BINDINGS)					\
-         $(BUILDDIR)/generated/bap_bindings.cmx	 	\
+         $(BUILDDIR)/generated/$(LIBRARY)_bindings.cmx	 	\
          $(BUILDDIR)/lib/apply_bindings.cmx		\
-         $(BUILDDIR)/generated/bap.o
+         $(BUILDDIR)/generated/$(LIBRARY).o
 
 CAML_INIT=$(BUILDDIR)/stub/init.o
 
 # The files that we'll generate
-GENERATED=$(BUILDDIR)/generated/bap.h \
-          $(BUILDDIR)/generated/bap.c \
-          $(BUILDDIR)/generated/bap_bindings.ml
+GENERATED=$(BUILDDIR)/generated/$(LIBRARY).h \
+          $(BUILDDIR)/generated/$(LIBRARY).c \
+          $(BUILDDIR)/generated/$(LIBRARY)_bindings.ml
 
-OSTYPE:=$(shell ocamlfind ocamlc -config | awk '/^os_type:/ {print $$2}')
-SYSTEM:=$(shell ocamlfind ocamlc -config | awk '/^system:/ {print $$2}')
-EXTDLL:=$(shell ocamlfind ocamlc -config | awk '/^ext_dll:/ {print $$2}')
-CC:= $(shell ocamlfind ocamlc -config | awk '/^bytecomp_c_compiler/ {for(i=2;i<=NF;i++) printf "%s " ,$$i}')
 
 ifeq ($(OSTYPE),$(filter $(OSTYPE),Win32 Cygwin))
 EXTEXE=.exe
@@ -42,37 +45,37 @@ GENERATOR=$(BUILDDIR)/generate$(EXTEXE)
 
 all: sharedlib
 
-sharedlib: $(BUILDDIR)/libbap$(EXTDLL)
+sharedlib: $(BUILDDIR)/lib$(LIBRARY)$(EXTDLL)
 
 
 ifeq ($(OSTYPE),$(filter $(OSTYPE),Win32 Cygwin))
-$(BUILDDIR)/libbap$(EXTDLL): $(CAML_INIT) $(LIBFILES)
-	ocamlfind opt -o $@ -linkpkg -output-obj -verbose -package $(PACKAGES) $^
+$(BUILDDIR)/lib$(LIBRARY)$(EXTDLL): $(CAML_INIT) $(LIBFILES)
+	$(OCAMLOPT) -o $@ -linkpkg -output-obj -verbose -package $(PACKAGES) $^
 else ifeq ($(SYSTEM),$(filter $(SYSTEM),macosx))
-$(BUILDDIR)/libbap$(EXTDLL): $(CAML_INIT) $(LIBFILES)
-	ocamlfind opt -o $@ -linkpkg -runtime-variant _pic -verbose -ccopt -dynamiclib -package $(PACKAGES) $^
+$(BUILDDIR)/lib$(LIBRARY)$(EXTDLL): $(CAML_INIT) $(LIBFILES)
+	$(OCAMLOPT) -o $@ -linkpkg -runtime-variant _pic -verbose -ccopt -dynamiclib -package $(PACKAGES) $^
 else
-$(BUILDDIR)/libbap$(EXTDLL): $(CAML_INIT) $(LIBFILES)
-	ocamlfind opt -o $@ -linkpkg -output-obj -runtime-variant _pic -verbose -package $(PACKAGES) $^
+$(BUILDDIR)/lib$(LIBRARY)$(EXTDLL): $(CAML_INIT) $(LIBFILES)
+	$(OCAMLOPT) -o $@ -linkpkg -output-obj -runtime-variant _pic -verbose -package $(PACKAGES) $^
 endif
 
 stubs: $(GENERATED)
 
 $(BUILDDIR)/stub/%.o:
-	ocamlc -g -c stub/init.c
+	ocamlc -g -c $(LIBRARY)/stub/init.c
 	mv init.o $@
 
 $(GENERATED): $(GENERATOR)
 	$(GENERATOR) $(BUILDDIR)/generated
 
 $(BUILDDIR)/%.o: %.c
-	$(CC) -c -o $@ -fPIC -I $(shell ocamlfind query ctypes) -I $(OCAMLDIR) -I $(OCAMLDIR)/../ctypes $<
+	$(OCAMLCC) -c -o $@ -fPIC -I $(shell $(OCAMLFIND) query ctypes) -I $(OCAMLDIR) -I $(OCAMLDIR)/../ctypes $<
 
 $(BUILDDIR)/%.cmx: %.ml
-	ocamlfind opt -c -o $@ -I $(BUILDDIR)/generated -I $(BUILDDIR)/lib -package $(PACKAGES) $<
+	$(OCAMLOPT) -c -o $@ -I $(BUILDDIR)/generated -I $(BUILDDIR)/lib -package $(PACKAGES) $<
 
 $(GENERATOR): $(GENERATOR_FILES)
-	ocamlfind opt -o $@ -linkpkg -package $(PACKAGES) $^
+	$(OCAMLOPT) -o $@ -linkpkg -package $(PACKAGES) $^
 
 clean:
 	rm -rf $(BUILDDIR)
@@ -87,14 +90,14 @@ endif
 
 
 install:
-	$(INSTALL_PROGRAM) -m644 $(BUILDDIR)/libbap$(EXTDLL) @libdir@/
-	$(INSTALL_PROGRAM) -m644 $(BUILDDIR)/generated/bap.h @includedir@/
+	$(INSTALL_PROGRAM) -m644 $(BUILDDIR)/lib$(LIBRARY)$(EXTDLL) @libdir@/
+	$(INSTALL_PROGRAM) -m644 $(BUILDDIR)/generated/$(LIBRARY).h @includedir@/
 
 install-strip:
 	$(MAKE) INSTALL_PROGRAM='$(INSTALL_PROGRAM) -s' install
 
 uninstall:
-	rm @includedir@/bap.h
-	rm @libdir@/libbap$(EXTDLL)
+	rm @includedir@/$(LIBRARY).h
+	rm @libdir@/lib$(LIBRARY)$(EXTDLL)
 
 .PHONY: all test install install-strip uninstall
