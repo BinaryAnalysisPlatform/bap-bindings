@@ -1,4 +1,8 @@
+# @configure_input@
 BUILDDIR=_build
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+INSTALL_PROGRAM=install
 VPATH=$(BUILDDIR)
 OCAMLDIR=$(shell ocamlopt -where)
 $(shell mkdir -p $(BUILDDIR) $(BUILDDIR)/stub $(BUILDDIR)/lib $(BUILDDIR)/stub_generator $(BUILDDIR)/test $(BUILDDIR)/generated)
@@ -81,4 +85,16 @@ else
 	LD_LIBRARY_PATH=$(BUILDDIR) _build/test/test.native
 endif
 
-.PHONY: test
+
+install:
+	$(INSTALL_PROGRAM) -m644 $(BUILDDIR)/libbap$(EXTDLL) @libdir@/
+	$(INSTALL_PROGRAM) -m644 $(BUILDDIR)/generated/bap.h @includedir@/
+
+install-strip:
+	$(MAKE) INSTALL_PROGRAM='$(INSTALL_PROGRAM) -s' install
+
+uninstall:
+	rm @includedir@/bap.h
+	rm @libdir@/libbap$(EXTDLL)
+
+.PHONY: all test install install-strip uninstall
