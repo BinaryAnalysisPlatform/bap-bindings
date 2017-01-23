@@ -38,26 +38,22 @@ suggested:
 * GCC
 * Patience (it takes some time to generate the bindings)
 
-BAP should be installed, and `_pic` runtime shou
 
-## Compilation
+## Compilation and installation
 
-Just type `make` and hit enter :)
+Nothing new here:
 
+```
+./configure
+make
+make install
+```
 
-## Installation
+You can parametrize installation variables, e.g., prefix using the
+configure script, see `./configure --help` for more information.
 
-Two files will be created after the compilation finishes:
-
-* `_build/libbap.so` - a shared object that contains
-  - BAP runtime (including code of the bap library)
-  - OCaml runtime
-* `_build/generated/bap.h` - a header file that describes BAP API.
-
-
-Currently the installation is totally manual, just copy these files to
-appropriate places. We will provide a proper `./configure; make; make
-install` trio ASAP.
+If the `configure` script is not available (e.g., when you just cloned
+the repo), then use `autoconf` to generate it.
 
 
 # Documentation
