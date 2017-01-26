@@ -18,3 +18,8 @@ _build/
 # oasis generated files
 setup.data
 setup.log
+Makefile
+autom4te.cache/
+/config.log
+/config.status
+/configure

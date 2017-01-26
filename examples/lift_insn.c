@@ -28,7 +28,7 @@ int main(int argc, const char **argv) {
     // Non-total functions return NULL in case of error.
     if (!mem) {
         // If an error has occured, then it can be queried with bap_error_get:
-        printf("Failed to create memory chunk: %s\n", bap_error_get());
+        printf("Failed to create a memory chunk: %s\n", bap_error_get());
         return 1;
     }
 

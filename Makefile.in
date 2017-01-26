@@ -1,0 +1,103 @@
+# @configure_input@
+LIBRARY=@LIBRARY@
+BUILDDIR=_build/$(LIBRARY)
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+INSTALL_PROGRAM=install
+VPATH=$(BUILDDIR):$(LIBRARY)
+OCAMLFIND=@OCAMLFIND@
+OCAMLOPT=$(OCAMLFIND) opt
+OCAMLDIR=@OCAMLDIR@
+OSTYPE=@OSTYPE@
+SYSTEM=@SYSTEM@
+EXTDLL=@EXTDLL@
+OCAMLCC=@OCAMLCC@
+$(shell mkdir -p $(BUILDDIR) $(BUILDDIR)/stub $(BUILDDIR)/lib $(BUILDDIR)/stub_generator $(BUILDDIR)/test $(BUILDDIR)/generated)
+PACKAGES=$(LIBRARY),bap.plugins,ctypes.stubs,ctypes.foreign,findlib.dynload
+
+BINDINGS=$(BUILDDIR)/lib/bindings.cmx
+
+# The files used to build the stub generator.
+GENERATOR_FILES=$(BINDINGS)				\
+                $(BUILDDIR)/stub_generator/generate.cmx
+
+# The files from which we'll build a shared library.
+LIBFILES=$(BINDINGS)					\
+         $(BUILDDIR)/generated/$(LIBRARY)_bindings.cmx	 	\
+         $(BUILDDIR)/lib/apply_bindings.cmx		\
+         $(BUILDDIR)/generated/$(LIBRARY).o
+
+CAML_INIT=$(BUILDDIR)/stub/init.o
+
+# The files that we'll generate
+GENERATED=$(BUILDDIR)/generated/$(LIBRARY).h \
+          $(BUILDDIR)/generated/$(LIBRARY).c \
+          $(BUILDDIR)/generated/$(LIBRARY)_bindings.ml
+
+
+ifeq ($(OSTYPE),$(filter $(OSTYPE),Win32 Cygwin))
+EXTEXE=.exe
+else
+EXTEXE=
+endif
+
+GENERATOR=$(BUILDDIR)/generate$(EXTEXE)
+
+all: sharedlib
+
+sharedlib: $(BUILDDIR)/lib$(LIBRARY)$(EXTDLL)
+
+
+ifeq ($(OSTYPE),$(filter $(OSTYPE),Win32 Cygwin))
+$(BUILDDIR)/lib$(LIBRARY)$(EXTDLL): $(CAML_INIT) $(LIBFILES)
+	$(OCAMLOPT) -o $@ -linkpkg -output-obj -verbose -package $(PACKAGES) $^
+else ifeq ($(SYSTEM),$(filter $(SYSTEM),macosx))
+$(BUILDDIR)/lib$(LIBRARY)$(EXTDLL): $(CAML_INIT) $(LIBFILES)
+	$(OCAMLOPT) -o $@ -linkpkg -runtime-variant _pic -verbose -ccopt -dynamiclib -package $(PACKAGES) $^
+else
+$(BUILDDIR)/lib$(LIBRARY)$(EXTDLL): $(CAML_INIT) $(LIBFILES)
+	$(OCAMLOPT) -o $@ -linkpkg -output-obj -runtime-variant _pic -verbose -package $(PACKAGES) $^
+endif
+
+stubs: $(GENERATED)
+
+$(BUILDDIR)/stub/%.o:
+	ocamlc -g -c $(LIBRARY)/stub/init.c
+	mv init.o $@
+
+$(GENERATED): $(GENERATOR)
+	$(GENERATOR) $(BUILDDIR)/generated
+
+$(BUILDDIR)/%.o: %.c
+	$(OCAMLCC) -c -o $@ -fPIC -I $(shell $(OCAMLFIND) query ctypes) -I $(OCAMLDIR) -I $(OCAMLDIR)/../ctypes $<
+
+$(BUILDDIR)/%.cmx: %.ml
+	$(OCAMLOPT) -c -o $@ -I $(BUILDDIR)/generated -I $(BUILDDIR)/lib -package $(PACKAGES) $<
+
+$(GENERATOR): $(GENERATOR_FILES)
+	$(OCAMLOPT) -o $@ -linkpkg -package $(PACKAGES) $^
+
+clean:
+	rm -rf $(BUILDDIR)
+
+test: all
+	$(MAKE) -C $@
+ifeq ($(OSTYPE),Win32)
+	PATH="$(BUILDDIR):$(PATH)" _build/test/test.native
+else
+	LD_LIBRARY_PATH=$(BUILDDIR) _build/test/test.native
+endif
+
+
+install:
+	$(INSTALL_PROGRAM) -m644 $(BUILDDIR)/lib$(LIBRARY)$(EXTDLL) @libdir@/
+	$(INSTALL_PROGRAM) -m644 $(BUILDDIR)/generated/$(LIBRARY).h @includedir@/
+
+install-strip:
+	$(MAKE) INSTALL_PROGRAM='$(INSTALL_PROGRAM) -s' install
+
+uninstall:
+	rm @includedir@/$(LIBRARY).h
+	rm @libdir@/lib$(LIBRARY)$(EXTDLL)
+
+.PHONY: all test install install-strip uninstall

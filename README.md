@@ -37,26 +37,24 @@ suggested:
 * GCC
 * Patience (it takes some time to generate the bindings)
 
-The PIC runtime is usually installed autotmatically with OCaml (at least in OPAM).
-
-## Compilation
-
-Just type `make` and hit enter :)
+The PIC runtime is usually installed with OCaml (at least in OPAM).
 
 
-## Installation
+## Compilation and installation
 
-Two files will be created after the compilation finishes:
+Nothing new here:
 
-* `_build/libbap.so` - a shared object that contains
-  - BAP runtime (including code of the bap library)
-  - OCaml runtime
-* `_build/generated/bap.h` - a header file that describes BAP API.
+```
+./configure
+make
+make install
+```
 
+You can parametrize installation variables, e.g., prefix using the
+configure script, see `./configure --help` for more information.
 
-Currently the installation is totally manual, just copy these files to
-appropriate places. We will provide a proper `./configure; make; make
-install` trio ASAP.
+If the `configure` script is not available (e.g., when you just cloned
+the repo), then use `autoconf` to generate it.
 
 
 # Documentation
@@ -89,34 +87,34 @@ counterpart.
    using a strcture. Field names of a structure correspond to the
    names of optional parameters. For example, `bap_project_create` corresponds
    to `Project.create` function that has the following interface:
-```ocaml
-val create :
-       ?disassembler:string ->
-       ?brancher:brancher source ->
-       ?symbolizer:symbolizer source ->
-       ?rooter:rooter source ->
-       ?reconstructor:reconstructor source ->
-       input -> t Or_error.t
-```
-   In C land it corresponds to
+    ```ocaml
+    val create :
+           ?disassembler:string ->
+           ?brancher:brancher source ->
+           ?symbolizer:symbolizer source ->
+           ?rooter:rooter source ->
+           ?reconstructor:reconstructor source ->
+           input -> t Or_error.t
+    ```
+       In C land it corresponds to
 
-```c
-struct bap_project_t* bap_project_create(struct bap_project_input_t* input,
-                                         struct bap_project_parameters_t* params);
-```
+    ```c
+    struct bap_project_t* bap_project_create(struct bap_project_input_t* input,
+                                             struct bap_project_parameters_t* params);
+    ```
 
-   Where structure `params` is defined as:
+       Where structure `params` is defined as:
 
-```c
-struct bap_project_parameters_t {
-  bap_rooter_source_t* rooter;
-  bap_brancher_source_t* brancher;
-  bap_symbolizer_source_t* symbolizer;
-  bap_reconstructor_source_t* reconstructor;
-  char* disassember;
-};
+    ```c
+    struct bap_project_parameters_t {
+      bap_rooter_source_t* rooter;
+      bap_brancher_source_t* brancher;
+      bap_symbolizer_source_t* symbolizer;
+      bap_reconstructor_source_t* reconstructor;
+      char* disassember;
+    };
 
-```
+    ```
    Each individual field of the params data structure can be
    `NULL`. Moreover, the params itself can be also `NULL`. That will denote
    that all optional arguments were omitted.

@@ -1,9 +1,11 @@
+BAPDIR=../_build/bap
 BUILDDIR=../_build/examples
 $(shell mkdir -p $(BUILDDIR))
 
 EXAMPLES=$(BUILDDIR)/lift_insn.native \
 	 $(BUILDDIR)/print_reachable.native \
-	 $(BUILDDIR)/show_image.native
+	 $(BUILDDIR)/show_image.native \
+	 $(BUILDDIR)/disasm.native
 
 all: $(EXAMPLES)
 
@@ -11,9 +13,9 @@ clean:
 	rm -rf $(BUILDDIR)
 
 $(BUILDDIR)/%.native: $(BUILDDIR)/%.o
-	gcc  -o $@ $< -L$(BUILDDIR)/.. -lbap
+	gcc  -o $@ $< -L$(BAPDIR) -lbap
 
 $(BUILDDIR)/%.o: %.c
-	gcc  -Werror -std=gnu99 -c -o $@ -I $(BUILDDIR)/../generated  $<
+	gcc  -Werror -std=gnu99 -c -o $@ -I $(BAPDIR)/generated  $<
 
 .PHONY: all clean
