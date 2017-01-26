@@ -326,10 +326,10 @@ struct
     let set err = current_error := Some err
     let clear () = current_error := None
 
-    let failf fmt = Format.kasprintf (fun str ->
+    let failf fmt = Format.kfprintf (fun ppf ->
+        let str = Format.flush_str_formatter () in
         let err = Error.of_string str in
-        set err;
-        Error err) fmt
+        Error err) Format.str_formatter fmt
 
     let lift x = match x with
       | Ok x -> Some x
