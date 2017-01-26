@@ -1,5 +1,5 @@
 AC_INIT([BAP C Bindings], [0.1-beta], [ivg@ieee.org])
-AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([Makefile test/Makefile examples/Makefile])
 
 
 AC_ARG_VAR(LIBRARY, [Specify library to build])

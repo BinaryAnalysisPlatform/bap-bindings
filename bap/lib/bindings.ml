@@ -458,7 +458,7 @@ struct
         end;
       def "copy_from" C.(ptr !!elt @-> int @-> returning !!seq)
         (fun ptr len ->
-          Seq.of_list C.CArray.(from_ptr ptr len |> to_list));
+           Seq.of_list C.CArray.(from_ptr ptr len |> to_list));
       seq
   end
 
@@ -545,6 +545,7 @@ struct
   let size_t = Unsigned.Size_t.of_int
 
   module Printable = struct
+    module Bap = Printable
     let instance (type t)
         (module T : Printable.S with type t = t) t =
       let name = Opaque.name t in
@@ -563,9 +564,6 @@ struct
   end
 
   module Data = struct
-
-
-
     let buffer ptr len =
       C.bigarray_of_ptr C.array1 len Bigarray.char ptr
 
@@ -1263,6 +1261,7 @@ struct
   end
 
   module Memory = struct
+    module Bap = Memory
     let t : mem opaque = Opaque.newtype "memory"
 
     let def fn = def ("memory_" ^ fn);;
@@ -1430,6 +1429,7 @@ struct
   end
 
   module Insn = struct
+    module Bap = Insn
     include Regular.Make(struct
         module T = Insn
         let name = "insn"
@@ -1489,29 +1489,29 @@ struct
     let def fn = def (namespace ^ "_" ^ fn)
 
     module Dfs = struct
-        type params = Params
+      type params = Params
 
-        let s = C.(ptr void)
-        let params : params C.structure ctype =
-          C.structure (namespace ^ "_visitor")
+      let s = C.(ptr void)
+      let params : params C.structure ctype =
+        C.structure (namespace ^ "_visitor")
 
-        let (%:) name typ =
-          C.field params name (fn_opt typ)
+      let (%:) name typ =
+        C.field params name (fn_opt typ)
 
-        let start_tree =
-          "start_tree" %: C.(n @-> s @-> returning void)
-        let enter_node =
-          "enter_node" %: C.(int @-> n @-> s @-> returning void)
-        let leave_node =
-          "leave_node" %: C.(int @-> n @-> s @-> returning void)
-        let enter_edge =
-          "enter_edge" %: C.(Edge_kind.t @-> e @-> s @-> returning void)
-        let leave_edge =
-          "leave_edge" %: C.(Edge_kind.t @-> e @-> s @-> returning void)
+      let start_tree =
+        "start_tree" %: C.(n @-> s @-> returning void)
+      let enter_node =
+        "enter_node" %: C.(int @-> n @-> s @-> returning void)
+      let leave_node =
+        "leave_node" %: C.(int @-> n @-> s @-> returning void)
+      let enter_edge =
+        "enter_edge" %: C.(Edge_kind.t @-> e @-> s @-> returning void)
+      let leave_edge =
+        "leave_edge" %: C.(Edge_kind.t @-> e @-> s @-> returning void)
 
-        let () =
-          C.seal params;
-          Internal.structure params;
+      let () =
+        C.seal params;
+        Internal.structure params;
     end
 
     module Node = struct
@@ -1600,7 +1600,7 @@ struct
   module Edge = struct
     module Tag = struct
       type t = [`Jump | `Cond | `Fall]
-               [@@deriving enumerate, compare, sexp]
+      [@@deriving enumerate, compare, sexp]
     end
     let tag : edge Enum.t = Enum.define (module Tag) "edge"
     let t = Enum.total tag
@@ -1609,6 +1609,13 @@ struct
   module Code = struct
     module T = struct
       type t = mem * insn
+
+      include Printable.Bap.Make(struct
+          type nonrec t = t
+          let module_name = None
+          let pp ppf (mem,insn) =
+            Format.fprintf ppf "%a\t\t%a" Memory.Bap.pp mem Insn.Bap.pp insn
+        end)
     end
     type t = T.t
     let t : t opaque = Opaque.newtype "code"
@@ -1616,8 +1623,17 @@ struct
     let list = Opaque.view seq
           ~write:Seq.Bap.of_list
           ~read:Seq.Bap.to_list;;
+
+    Printable.instance (module T) t;
     def "code_mem" C.(!!t @-> returning !!Memory.t) fst;
     def "code_insn" C.(!!t @-> returning !!Insn.t) snd;
+    def "code_length" C.(!!t @-> returning int)
+      (fun (mem,_) -> Memory.Bap.length mem);
+    def "code_addr" C.(!!t @-> returning int64_t)
+      (fun (mem,_) -> Memory.Bap.min_addr mem |> Addr.to_int64 |> function
+         | Error _ -> 0L
+         | Ok n -> n)
+
   end
 
 
@@ -1756,6 +1772,97 @@ struct
     def "code" C.(!!t @-> returning !!Code.seq) Disasm.insns;
     def "insns" C.(!!t @-> returning !!Insn.seq)
       Seq.Bap.(fun d -> Disasm.insns d >>| snd);
+
+
+    module Basic = struct
+      module Dis = struct
+        open Bap.Std
+        module Dis = Disasm_expert.Basic
+        include struct
+          open Dis
+          type t = {
+            lifter  : lifter;
+            disasm  : (empty, empty) Dis.t;
+            endian  : endian;
+            awidth  : int;
+          }
+        end
+
+        open Or_error.Monad_infix
+
+        let lifter_of_arch arch =
+          let module Target = (val target_of_arch arch) in
+          Target.lift
+
+        let unknown_semantics = Error.failf "unknown semantics"
+        let unknown _ _ = unknown_semantics
+
+        let default_backend () = match Dis.available_backends () with
+          | [] -> Error.failf "no disassemblers are available"
+          | x :: _ -> Ok x
+
+        let create arch =
+          default_backend () >>= fun backend ->
+          Dis.create ~backend (Arch.to_string arch) >>| fun disasm -> {
+            disasm; lifter = lifter_of_arch arch;
+            endian = Arch.endian arch;
+            awidth = Size.in_bits (Arch.addr_size arch);
+          }
+
+        let create_expert target backend cpu awidth endian debug_level =
+          let backend = match backend with
+            | Some backend -> Ok backend
+            | None -> default_backend () in
+          backend >>= fun backend ->
+          Dis.create ~debug_level ?cpu ~backend target >>| fun disasm ->
+          match Arch.of_string target with
+          | None -> {
+              disasm;
+              lifter = unknown;
+              awidth;
+              endian = match endian with
+                | None -> LittleEndian
+                | Some endian -> endian
+            }
+          | Some arch -> {
+              disasm;
+              lifter = lifter_of_arch arch;
+              endian = Arch.endian arch;
+              awidth = Size.in_bits (Arch.addr_size arch);
+            }
+
+        let close {disasm} = Dis.close disasm
+
+        let next {disasm; awidth; lifter; endian} ptr len addr =
+          let data = C.bigarray_of_ptr C.array1 len Bigarray.char ptr in
+          let addr = Addr.of_int64 ~width:awidth addr in
+          Memory.create endian addr data >>= Dis.insn_of_mem disasm >>= function
+          | _,None,_ -> Error.failf "no instruction"
+          | mem,Some insn,_ -> Or_error.return @@ match lifter mem insn with
+            | Ok bil  -> mem, Insn.of_basic ~bil insn
+            | Error _ -> mem, Insn.of_basic insn
+      end
+
+      let t = Opaque.newtype "disasm_basic"
+      let def fn = def ("basic_" ^ fn);;
+
+      def "create" C.(Arch.total @-> returning !?t)
+        (Error.lift1 Dis.create);
+
+      def "create_expert" C.(string @->
+                             string_opt @->
+                             string_opt @->
+                             int @->
+                             Endian.partial @->
+                             int @-> returning !?t)
+      (fun t b c a e d -> Error.lift (Dis.create_expert t b c a e d));
+
+      def "next" C.(!!t @-> ptr char @-> int @-> int64_t @-> returning !?Code.t)
+        (fun d ptr len addr -> Dis.next d ptr len addr |> Error.lift);
+
+      def "close" C.(!!t @-> returning void) Dis.close;
+    end
+
   end
 
   module Term = struct

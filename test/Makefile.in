@@ -1,0 +1,16 @@
+BAPDIR=../_build/bap
+TESTDIR=../_build/test
+$(shell mkdir -p $(TESTDIR))
+
+all: $(TESTDIR)/test.native
+
+clean:
+	rm -rf $(TESTDIR)
+
+$(TESTDIR)/test.native: $(TESTDIR)/test.o
+	gcc -o $@ $< -L$(BAPDIR) -lbap
+
+$(TESTDIR)/test.o: test.c
+	gcc -c -o $@ -I $(BAPDIR)/generated  $<
+
+.PHONY: all clean

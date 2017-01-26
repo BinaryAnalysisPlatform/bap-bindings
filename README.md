@@ -87,34 +87,34 @@ counterpart.
    using a strcture. Field names of a structure correspond to the
    names of optional parameters. For example, `bap_project_create` corresponds
    to `Project.create` function that has the following interface:
-```ocaml
-val create :
-       ?disassembler:string ->
-       ?brancher:brancher source ->
-       ?symbolizer:symbolizer source ->
-       ?rooter:rooter source ->
-       ?reconstructor:reconstructor source ->
-       input -> t Or_error.t
-```
-   In C land it corresponds to
+    ```ocaml
+    val create :
+           ?disassembler:string ->
+           ?brancher:brancher source ->
+           ?symbolizer:symbolizer source ->
+           ?rooter:rooter source ->
+           ?reconstructor:reconstructor source ->
+           input -> t Or_error.t
+    ```
+       In C land it corresponds to
 
-```c
-struct bap_project_t* bap_project_create(struct bap_project_input_t* input,
-                                         struct bap_project_parameters_t* params);
-```
+    ```c
+    struct bap_project_t* bap_project_create(struct bap_project_input_t* input,
+                                             struct bap_project_parameters_t* params);
+    ```
 
-   Where structure `params` is defined as:
+       Where structure `params` is defined as:
 
-```c
-struct bap_project_parameters_t {
-  bap_rooter_source_t* rooter;
-  bap_brancher_source_t* brancher;
-  bap_symbolizer_source_t* symbolizer;
-  bap_reconstructor_source_t* reconstructor;
-  char* disassember;
-};
+    ```c
+    struct bap_project_parameters_t {
+      bap_rooter_source_t* rooter;
+      bap_brancher_source_t* brancher;
+      bap_symbolizer_source_t* symbolizer;
+      bap_reconstructor_source_t* reconstructor;
+      char* disassember;
+    };
 
-```
+    ```
    Each individual field of the params data structure can be
    `NULL`. Moreover, the params itself can be also `NULL`. That will denote
    that all optional arguments were omitted.
