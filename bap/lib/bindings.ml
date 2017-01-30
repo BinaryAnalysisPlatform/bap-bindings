@@ -732,48 +732,55 @@ struct
 
     let to_int64 x = match Word.to_int64 x with
       | Error _ -> Int64.minus_one
-      | Ok x -> x
+      | Ok x -> x;;
 
-    let () =
-      def "of_string" C.(string @-> returning !!t) Word.of_string;
-      def "of_bool" C.(bool @-> returning !!t) Word.of_bool;
-      def "of_int" C.(int @-> int @-> returning !!t)
-        (fun width x -> Word.of_int ~width x);
-      def "of_int32" C.(int @-> int32_t @-> returning !!t)
-        (fun width x -> Word.of_int32 ~width x);
-      def "of_int64" C.(int @-> int64_t @-> returning !!t)
-        (fun width x -> Word.of_int64 ~width x);
-      def "of_binary" C.(int @-> Endian.t @-> string @-> returning !!t)
-        (fun width endian data -> Word.of_binary ~width endian data);
-      def "fits_into_int64" C.(!!t @-> returning bool) fits_into_int64;
-      def "to_int64" C.(!!t @-> returning int64_t) to_int64;
-      def "signed" C.(!!t @-> returning !!t) Word.signed;
-      def "is_zero" C.(!!t @-> returning bool) Word.is_zero;
-      def "is_one" C.(!!t @-> returning bool) Word.is_one;
-      def "bitwidth" C.(!!t @-> returning int) Word.bitwidth;
-      def "extract" C.(int @-> int @-> !!t @-> returning !?t)
-        (fun hi lo t -> Error.lift1 (Word.extract ~hi ~lo) t);
-      def "concat" C.(!!t @-> !!t @-> returning !!t) Word.concat;
-      def "succ" C.(!!t @-> returning !!t) Word.succ;
-      def "pred" C.(!!t @-> returning !!t) Word.pred;
-      def "nsucc" C.(!!t @-> int @-> returning !!t) Word.nsucc;
-      def "npred" C.(!!t @-> int @-> returning !!t) Word.npred;
-      let bop name = def name C.(!!t @-> !!t @-> returning !!t) in
-      bop "add" Word.add;
-      bop "sub" Word.sub;
-      bop "mul" Word.mul;
-      bop "div" Word.div;
-      bop "modulo" Word.modulo;
-      bop "logand" Word.logand;
-      bop "logor" Word.logor;
-      bop "logxor" Word.logxor;
-      bop "lshift" Word.lshift;
-      bop "rshift" Word.rshift;
-      bop "arshift" Word.arshift;
-      let uop name = def name C.(!!t @-> returning !!t) in
-      uop "abs" Word.abs;
-      uop "neg" Word.neg;
-      uop "lnot" Word.lnot;
+
+    def "of_string" C.(string @-> returning !!t) Word.of_string;
+    def "of_bool" C.(bool @-> returning !!t) Word.of_bool;
+    def "of_int" C.(int @-> int @-> returning !!t)
+      (fun width x -> Word.of_int ~width x);
+    def "of_int32" C.(int @-> int32_t @-> returning !!t)
+      (fun width x -> Word.of_int32 ~width x);
+    def "of_int64" C.(int @-> int64_t @-> returning !!t)
+      (fun width x -> Word.of_int64 ~width x);
+    def "of_binary" C.(int @-> Endian.t @-> string @-> returning !!t)
+      (fun width endian data -> Word.of_binary ~width endian data);
+    def "fits_into_int64" C.(!!t @-> returning bool) fits_into_int64;
+    def "to_int64" C.(!!t @-> returning int64_t) to_int64;
+    def "signed" C.(!!t @-> returning !!t) Word.signed;
+    def "is_zero" C.(!!t @-> returning bool) Word.is_zero;
+    def "is_one" C.(!!t @-> returning bool) Word.is_one;
+    def "bitwidth" C.(!!t @-> returning int) Word.bitwidth;
+    def "extract" C.(int @-> int @-> !!t @-> returning !?t)
+      (fun hi lo t -> Error.lift1 (Word.extract ~hi ~lo) t);
+    def "concat" C.(!!t @-> !!t @-> returning !!t) Word.concat;
+    def "succ" C.(!!t @-> returning !!t) Word.succ;
+    def "pred" C.(!!t @-> returning !!t) Word.pred;
+    def "nsucc" C.(!!t @-> int @-> returning !!t) Word.nsucc;
+    def "npred" C.(!!t @-> int @-> returning !!t) Word.npred;
+    let bop name = def name C.(!!t @-> !!t @-> returning !!t) in
+    bop "add" Word.add;
+    bop "sub" Word.sub;
+    bop "mul" Word.mul;
+    bop "div" Word.div;
+    bop "modulo" Word.modulo;
+    bop "logand" Word.logand;
+    bop "logor" Word.logor;
+    bop "logxor" Word.logxor;
+    bop "lshift" Word.lshift;
+    bop "rshift" Word.rshift;
+    bop "arshift" Word.arshift;
+    let uop name = def name C.(!!t @-> returning !!t) in
+    uop "abs" Word.abs;
+    uop "neg" Word.neg;
+    uop "lnot" Word.lnot;
+
+    def "copy_bytes"
+      C.(!!t @-> Endian.t @-> ptr char @-> int @-> returning void)
+      (fun word endian ptr len ->
+         let ba = C.bigarray_of_ptr C.array1 len Bigarray.char ptr in
+         Word.enum_chars word endian |>
+         Sequence.iteri ~f:(Bigstring.set ba))
   end
 
 
