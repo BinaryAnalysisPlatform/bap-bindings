@@ -974,6 +974,7 @@ struct
       | Bil.UnOp (_,x)
       | Bil.Cast (_,_,x)
       | Bil.Let (_,_,x)
+      | Bil.Ite (x,_,_)
       | Bil.Extract (_,_,x) -> Some x
       | _ -> None
 
