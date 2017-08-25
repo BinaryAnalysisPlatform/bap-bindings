@@ -728,10 +728,10 @@ struct
         module T = Word
       end)
 
-    let fits_into_int64 x = Result.is_ok (Word.to_int64 x)
+    let fits_into f x = Result.is_ok (f x)
 
-    let to_int64 x = match Word.to_int64 x with
-      | Error _ -> Int64.minus_one
+    let cast f err x = match f x with
+      | Error _ -> err
       | Ok x -> x;;
 
 
@@ -745,9 +745,14 @@ struct
       (fun width x -> Word.of_int64 ~width x);
     def "of_binary" C.(int @-> Endian.t @-> string @-> returning !!t)
       (fun width endian data -> Word.of_binary ~width endian data);
-    def "fits_into_int64" C.(!!t @-> returning bool) fits_into_int64;
-    def "to_int64" C.(!!t @-> returning int64_t) to_int64;
+    def "fits_into_int64" C.(!!t @-> returning bool) (fits_into Word.to_int64);
+    def "fits_into_int32" C.(!!t @-> returning bool) (fits_into Word.to_int32);
+    def "fits_into_int" C.(!!t @-> returning bool) (fits_into Word.to_int);
+    def "to_int64" C.(!!t @-> returning int64_t) (cast Word.to_int64 Int64.minus_one);
+    def "to_int32" C.(!!t @-> returning int32_t) (cast Word.to_int32 Int32.minus_one);
+    def "to_int" C.(!!t @-> returning int) (cast Word.to_int Int.minus_one);
     def "signed" C.(!!t @-> returning !!t) Word.signed;
+    def "unsigned" C.(!!t @-> returning !!t) Word.unsigned;
     def "is_zero" C.(!!t @-> returning bool) Word.is_zero;
     def "is_one" C.(!!t @-> returning bool) Word.is_one;
     def "bitwidth" C.(!!t @-> returning int) Word.bitwidth;
@@ -1083,9 +1088,11 @@ struct
       def "create_concat" C.(!!t @-> !!t @-> returning !!t) Bil.concat ;
       def "fold_consts" C.(!!t @-> returning !!t) Exp.(fixpoint fold_consts);
       def "free_vars" C.(!!t @-> returning !!Var.pset) Exp.free_vars;
+      def "normalize" C.(!!t @-> returning !!t) Exp.normalize;
   end
 
   module Stmt = struct
+    module Bap = Stmt
     include Regular.Make(struct
         type t = stmt
         let name = "stmt"
@@ -1211,7 +1218,11 @@ struct
       C.(!!t @-> returning !!Var.pset) Bil.free_vars;
 
     def "fold_consts" C.(!!t @-> returning !!t)
-      Bil.(fixpoint fold_consts)
+      Bil.(fold_consts);
+
+    def "normalize" C.(!!t @-> bool @-> returning !!t)
+      (fun bil normalize_exp -> Stmt.Bap.normalize
+          ~normalize_exp bil)
   end
 
   module Reg = struct
