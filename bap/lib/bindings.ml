@@ -5,6 +5,7 @@ open Graphlib.Std
 open Bap_plugins.Std
 open Format
 module C = Ctypes
+open Polymorphic_compare
 
 include Self()
 
@@ -360,7 +361,10 @@ struct
 
   module Container = struct
     module type S0 = Container.S0
-    module type S1 = Container.S1
+    module type S1 = sig
+      include Container.S1
+      val mem : 'a t -> 'a -> bool
+    end
 
     let apply hf seq f data = hf seq ~f:(fun elt -> f elt data)
 
@@ -438,7 +442,10 @@ struct
       let module Seq0 = struct
         type elt = t
         type t = elt seq
-        include (Seq : Container.S1 with type 'a t := 'a seq)
+        include (struct
+          include Seq
+          let mem = mem ~equal
+        end : Container.S1 with type 'a t := 'a seq)
       end in
       let name = Opaque.name elt in
       let seq : t seq opaque = Opaque.newtype (name ^ "_seq") in
@@ -482,7 +489,6 @@ struct
         type t = a Hash_set.t and elt = a
         include (struct
           include Hash_set
-          let mem ?equal = mem
         end : Container.S1 with type 'a t := 'a Hash_set.t)
       end in
       let name = Opaque.name elt ^ "_set" in
@@ -1335,7 +1341,10 @@ struct
       module Memmap0 = struct
         type elt = Value.t
         type t = elt memmap
-        include (Memmap : Container.S1 with type 'a t := 'a memmap)
+        include (struct
+          include Memmap
+          let mem = mem ~equal
+        end : Container.S1 with type 'a t := 'a memmap)
       end
 
       let name = "mem_" ^ Opaque.name Value.t ^ "_map"
@@ -1640,8 +1649,8 @@ struct
     let t : t opaque = Opaque.newtype "code"
     let seq : t seq opaque = Seq.instance (module T) t;;
     let list = Opaque.view seq
-          ~write:Seq.Bap.of_list
-          ~read:Seq.Bap.to_list;;
+        ~write:Seq.Bap.of_list
+        ~read:Seq.Bap.to_list;;
 
     Printable.instance (module T) t;
     def "code_mem" C.(!!t @-> returning !!Memory.t) fst;
@@ -1672,17 +1681,17 @@ struct
 
   module Cfg = struct
     include Graph(struct
-      module G = Graphs.Cfg
-      let namespace = "cfg"
-      let node = Block.t
-      let nodes = Block.seq
-      let edge : G.edge opaque = Opaque.newtype "cfg_edge"
-      let edges = Seq.instance (module G.Edge) edge
-      let edge_label = Edge.t
-      let node_label_opaque : G.Node.label opaque =
-        Opaque.newtype "cfg_node_label"
-      let node_label = !!node_label_opaque
-    end)
+        module G = Graphs.Cfg
+        let namespace = "cfg"
+        let node = Block.t
+        let nodes = Block.seq
+        let edge : G.edge opaque = Opaque.newtype "cfg_edge"
+        let edges = Seq.instance (module G.Edge) edge
+        let edge_label = Edge.t
+        let node_label_opaque : G.Node.label opaque =
+          Opaque.newtype "cfg_node_label"
+        let node_label = !!node_label_opaque
+      end)
   end
 
   module Source = struct
@@ -1874,7 +1883,7 @@ struct
                              int @->
                              Endian.partial @->
                              int @-> returning !?t)
-      (fun t b c a e d -> Error.lift (Dis.create_expert t b c a e d));
+        (fun t b c a e d -> Error.lift (Dis.create_expert t b c a e d));
 
       def "next" C.(!!t @-> ptr char @-> int @-> int64_t @-> returning !?Code.t)
         (fun d ptr len addr -> Dis.next d ptr len addr |> Error.lift);
@@ -2140,7 +2149,7 @@ struct
     Term.expressible (module Phi) t;;
 
     def "create" C.(!!Var.t @-> !!Tid.t @-> !!Exp.t @-> !?Tid.t @->
-                   returning !!t)
+                    returning !!t)
       (fun var inc exp tid -> Phi.create ?tid var inc exp);;
     def "lhs" C.(!!t @-> returning !!Var.t) Phi.lhs;;
     def "with_lhs" C.(!!t @-> !!Var.t @-> returning !!t) Phi.with_lhs;
@@ -2532,7 +2541,7 @@ struct
             Error.failf "Pass `%s' failed at runtime with: %a\nBacktrace:\n%s"
               (Project.Pass.name p) Exn.pp exn bt
           | Error (Project.Pass.Runtime_error (p,exn)) ->
-              Error.failf "Pass `%s' failed at runtime with: %a\n"
+            Error.failf "Pass `%s' failed at runtime with: %a\n"
               (Project.Pass.name p) Exn.pp exn
 
 
