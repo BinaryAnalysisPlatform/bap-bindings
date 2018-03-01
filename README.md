@@ -45,6 +45,7 @@ The PIC runtime is usually installed with OCaml (at least in OPAM).
 Nothing new here:
 
 ```
+autoconf
 ./configure
 make
 make install
