@@ -20,6 +20,10 @@ let generate dirname =
 #include <stdlib.h>
 
 #ifdef __cplusplus
+#ifndef __bool_true_false_are_defined
+#include <cstdbool>
+#endif
+
 extern \"C\" {
 #endif
 
