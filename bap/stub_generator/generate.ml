@@ -16,7 +16,10 @@ let generate dirname =
       (Cstubs_inverted.write_c ~prefix) stubs;
 
     fprintf (formatter_of_out_channel h_fd)
-"#include <stdint.h>
+"#ifndef BAP_H
+#define BAP_H
+
+#include <stdint.h>
 #include <stdlib.h>
 
 #ifdef __cplusplus
@@ -31,6 +34,8 @@ void bap_init(int argc, const char *argv[]);
 %a
 #ifdef __cplusplus
 }
+#endif
+
 #endif@\n%!"
     (Cstubs_inverted.write_c_header ~prefix) stubs;
 
