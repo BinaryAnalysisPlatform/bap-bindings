@@ -43,7 +43,7 @@ int main(int argc, const char **argv) {
     // print already registered pass
     print_passes("registered passes");
 
-    // registered a new one and print again
+    // register a new one and print again
     bap_bil_pass_register("my-pass", my_pass, NULL, NULL);
     print_passes("updated passes");
 

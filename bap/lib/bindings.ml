@@ -1236,7 +1236,6 @@ struct
     def "prune_dead_virtuals" C.(!!t @-> returning !!t)
       Bil.prune_dead_virtuals;
 
-
     module Pass = struct
       module T = struct
         type t = Bil.pass
