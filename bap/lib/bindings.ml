@@ -1,4 +1,4 @@
-open Core_kernel.Std
+open Core_kernel
 open Bap.Std
 open Regular.Std
 open Graphlib.Std
@@ -53,7 +53,7 @@ struct
       assert (first >= 0);
       let compare x y = E.compare y x in
       let enum = Array.of_list E.all in
-      Array.sort enum ~cmp:compare;
+      Array.sort enum ~compare;
       let read i =
         Array.get enum (i - first) in
       let write t =
@@ -1192,6 +1192,7 @@ struct
 
   module Bil = struct
     let t  = Stmt.list
+    let pass : Bil.pass opaque = Opaque.newtype "pass"
 
     let def fn = def ("bil_" ^ fn);;
 
@@ -1228,7 +1229,43 @@ struct
 
     def "normalize" C.(!!t @-> bool @-> returning !!t)
       (fun bil normalize_exp -> Stmt.Bap.normalize
-          ~normalize_exp bil)
+          ~normalize_exp bil);
+
+    def "propagate_consts" C.(!!t @-> returning !!t)
+      Bil.propagate_consts;
+
+    def "prune_dead_virtuals" C.(!!t @-> returning !!t)
+      Bil.prune_dead_virtuals;
+
+
+    module Pass = struct
+      module T = struct
+        type t = Bil.pass
+      end
+
+      let def fn = def ("pass_" ^ fn);;
+
+      let seq = Seq.instance (module T) pass
+
+      let list = Opaque.view seq
+          ~write:Seq.Bap.of_list
+          ~read:Seq.Bap.to_list ;;
+
+      def "name" C.(!!pass @-> returning string) Bil.Pass.name;
+
+      def "register"
+        C.(string_opt @-> string @-> fn (!!t @-> ptr void @-> returning !!t)
+           @-> ptr void @-> returning !!pass)
+        (fun desc name f data -> Bil.register_pass ?desc name (fun bil -> f bil data));
+
+      def "select" C.(!!seq @-> returning void)
+        (fun xs -> Bil.select_passes (Seq.Bap.to_list xs));
+
+      def "passes" C.(void @-> returning !!seq)
+        (fun _ -> Seq.Bap.of_list (Bil.passes ()));
+
+    end
+
   end
 
   module Reg = struct
