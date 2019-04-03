@@ -5,7 +5,8 @@ $(shell mkdir -p $(BUILDDIR))
 EXAMPLES=$(BUILDDIR)/lift_insn.native \
 	 $(BUILDDIR)/print_reachable.native \
 	 $(BUILDDIR)/show_image.native \
-	 $(BUILDDIR)/disasm.native
+	 $(BUILDDIR)/disasm.native \
+	 $(BUILDDIR)/run_bil_pass.native
 
 all: $(EXAMPLES)
 

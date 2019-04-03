@@ -1192,7 +1192,6 @@ struct
 
   module Bil = struct
     let t  = Stmt.list
-    let pass : Bil.pass opaque = Opaque.newtype "pass"
 
     let def fn = def ("bil_" ^ fn);;
 
@@ -1243,7 +1242,9 @@ struct
         type t = Bil.pass
       end
 
-      let def fn = def ("pass_" ^ fn);;
+      let pass : Bil.pass opaque = Opaque.newtype "bil_pass"
+
+      let def fn = def ("pass_" ^ fn)
 
       let seq = Seq.instance (module T) pass
 
@@ -1254,15 +1255,15 @@ struct
       def "name" C.(!!pass @-> returning string) Bil.Pass.name;
 
       def "register"
-        C.(string_opt @-> string @-> fn (!!t @-> ptr void @-> returning !!t)
+        C.(string @-> fn (!!t @-> ptr void @-> returning !!t) @-> string_opt
            @-> ptr void @-> returning !!pass)
-        (fun desc name f data -> Bil.register_pass ?desc name (fun bil -> f bil data));
+        (fun name f desc data -> Bil.register_pass ?desc name (fun bil -> f bil data));
 
       def "select" C.(!!seq @-> returning void)
         (fun xs -> Bil.select_passes (Seq.Bap.to_list xs));
 
       def "passes" C.(void @-> returning !!seq)
-        (fun _ -> Seq.Bap.of_list (Bil.passes ()));
+        (fun () -> Seq.Bap.of_list (Bil.passes ()));
 
     end
 
