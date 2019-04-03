@@ -1,4 +1,4 @@
-open Core_kernel.Std
+open Core_kernel
 open Bap.Std
 open Regular.Std
 open Graphlib.Std
@@ -53,7 +53,7 @@ struct
       assert (first >= 0);
       let compare x y = E.compare y x in
       let enum = Array.of_list E.all in
-      Array.sort enum ~cmp:compare;
+      Array.sort enum ~compare;
       let read i =
         Array.get enum (i - first) in
       let write t =
