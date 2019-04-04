@@ -452,12 +452,15 @@ struct
       let iter :  t Iter.t opaque = Opaque.newtype (name ^ "_seq_iterator") in
       let def fn = def (name ^ "_seq_" ^ fn) in
       let mapper = fn C.(!!elt @-> ptr void @-> returning !!elt) in
+      let filter = fn C.(!!elt @-> ptr void @-> returning bool) in
       Internal.typedef mapper (name ^ "_seq_mapper");
       Opaque.instanceof ~base:t seq;
       Container.instance (module Seq0) seq elt;
       iterator name seq iter elt;
       def "map" C.(!!seq @-> mapper @-> ptr void @-> returning !!seq)
         (fun seq f data -> Seq.map seq ~f:(fun x -> f x data));
+      def "filter" C.(!!seq @-> filter @-> ptr void @-> returning !!seq)
+        (fun seq f data -> Seq.filter seq ~f:(fun x -> f x data));
       def "view" C.(ptr !!elt @-> int @-> returning !!seq)
         begin fun ptr len ->
           let arr = C.CArray.from_ptr ptr len in

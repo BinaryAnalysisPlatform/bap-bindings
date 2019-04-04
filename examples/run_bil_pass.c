@@ -1,7 +1,11 @@
 #include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
 #include "bap.h"
 
 int run = 1;
+char *pass_name = "my-pass";
+
 
 //just a dummy pass that outputs a message to proove it was run
 bap_bil_t my_pass(bap_bil_t x, void *a) {
@@ -12,8 +16,7 @@ bap_bil_t my_pass(bap_bil_t x, void *a) {
     return x;
 }
 
-void print_passes(char *prepend) {
-    bap_bil_pass_seq_t *p = bap_bil_pass_passes();
+void print_passes(char *prepend, bap_bil_pass_seq_t *p) {
     bap_bil_pass_seq_iterator_t *iter = bap_bil_pass_seq_iterator_create(p);
     bap_bil_pass_t *c = bap_bil_pass_seq_iterator_next(iter);
 
@@ -25,10 +28,21 @@ void print_passes(char *prepend) {
     };
     printf("\n");
 
-    bap_release(p);
     bap_release(iter);
     bap_release(c);
 }
+
+void print_all_passes(char *prepend) {
+    bap_bil_pass_seq_t *p = bap_bil_pass_passes();
+    print_passes(prepend, p);
+    bap_release(p);
+}
+
+bool its_my_pass(bap_bil_pass_t *c, void *x) {
+    char *name = bap_bil_pass_name(c);
+    return !(strcmp(name, pass_name));
+}
+
 
 int main(int argc, const char **argv) {
     //init caml runtime, init IO
@@ -41,15 +55,17 @@ int main(int argc, const char **argv) {
     }
 
     // print already registered pass
-    print_passes("registered passes");
+    print_all_passes("registered passes");
 
-    // register a new one and print again
-    bap_bil_pass_register("my-pass", my_pass, NULL, NULL);
-    print_passes("updated passes");
+    // registered a new one and print again
+    bap_bil_pass_register(pass_name, my_pass, NULL, NULL);
+    print_all_passes("updated passes");
 
-    // select all avalable passes
+    // select only one pass
     bap_bil_pass_seq_t *p = bap_bil_pass_passes();
-    bap_bil_pass_select(p);
+    bap_bil_pass_seq_t *s = bap_bil_pass_seq_filter(p,its_my_pass,NULL);
+    print_passes("filtered passes", s);
+    bap_bil_pass_select(s);
 
     // create project
     bap_project_input_t *input = bap_project_input_file((char *)argv[1], NULL);
@@ -57,6 +73,7 @@ int main(int argc, const char **argv) {
 
     // release pointers obtained from BAP
     bap_release(p);
+    bap_release(s);
     bap_release(input);
     bap_release(proj);
 
