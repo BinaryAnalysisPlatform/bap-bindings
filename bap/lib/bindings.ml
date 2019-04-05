@@ -452,12 +452,15 @@ struct
       let iter :  t Iter.t opaque = Opaque.newtype (name ^ "_seq_iterator") in
       let def fn = def (name ^ "_seq_" ^ fn) in
       let mapper = fn C.(!!elt @-> ptr void @-> returning !!elt) in
+      let filter = fn C.(!!elt @-> ptr void @-> returning bool) in
       Internal.typedef mapper (name ^ "_seq_mapper");
       Opaque.instanceof ~base:t seq;
       Container.instance (module Seq0) seq elt;
       iterator name seq iter elt;
       def "map" C.(!!seq @-> mapper @-> ptr void @-> returning !!seq)
         (fun seq f data -> Seq.map seq ~f:(fun x -> f x data));
+      def "filter" C.(!!seq @-> filter @-> ptr void @-> returning !!seq)
+        (fun seq f data -> Seq.filter seq ~f:(fun x -> f x data));
       def "view" C.(ptr !!elt @-> int @-> returning !!seq)
         begin fun ptr len ->
           let arr = C.CArray.from_ptr ptr len in
@@ -1228,7 +1231,44 @@ struct
 
     def "normalize" C.(!!t @-> bool @-> returning !!t)
       (fun bil normalize_exp -> Stmt.Bap.normalize
-          ~normalize_exp bil)
+          ~normalize_exp bil);
+
+    def "propagate_consts" C.(!!t @-> returning !!t)
+      Bil.propagate_consts;
+
+    def "prune_dead_virtuals" C.(!!t @-> returning !!t)
+      Bil.prune_dead_virtuals;
+
+    module Pass = struct
+      module T = struct
+        type t = Bil.pass
+      end
+
+      let pass : Bil.pass opaque = Opaque.newtype "bil_pass"
+
+      let def fn = def ("pass_" ^ fn)
+
+      let seq = Seq.instance (module T) pass
+
+      let list = Opaque.view seq
+          ~write:Seq.Bap.of_list
+          ~read:Seq.Bap.to_list ;;
+
+      def "name" C.(!!pass @-> returning string) Bil.Pass.name;
+
+      def "register"
+        C.(string @-> fn (!!t @-> ptr void @-> returning !!t) @-> string_opt
+           @-> ptr void @-> returning !!pass)
+        (fun name f desc data -> Bil.register_pass ?desc name (fun bil -> f bil data));
+
+      def "select" C.(!!seq @-> returning void)
+        (fun xs -> Bil.select_passes (Seq.Bap.to_list xs));
+
+      def "passes" C.(void @-> returning !!seq)
+        (fun () -> Seq.Bap.of_list (Bil.passes ()));
+
+    end
+
   end
 
   module Reg = struct
