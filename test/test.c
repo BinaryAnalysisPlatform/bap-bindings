@@ -66,16 +66,16 @@ bap_project_t *dead_taint_analysis(bap_project_t *proj, void *unused) {
 
 
 int main(int argc, const char **argv) {
-    bap_error_t *er = bap_init2(argc, argv, NULL);
+    int r = bap_init2(argc, argv, NULL);
 
-    if (er) {
+    if (r) {
         printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }
 
     printf("BAP.%s was succesfully initialized\n", bap_version());
 
-    bap_project_input_t * input = bap_project_input_file("/bin/true", "llvm");
+    bap_project_input_t * input = bap_project_input_file("/bin/true", NULL);
     bap_project_t *proj = bap_project_create(input, NULL);
 
     if (!proj) {

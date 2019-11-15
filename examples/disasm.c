@@ -17,9 +17,9 @@ char data[] = "\x48\x8d\x00\x48\x83\xec\x08\x48\x83\xc4\x08\xe8\x47\xee\xff\xff"
 
 
 int main(int argc, const char **argv) {
-    bap_error_t *er = bap_init2(argc, argv, NULL);
+    int r = bap_init2(argc, argv, NULL);
 
-    if (er) {
+    if (r) {
         printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }

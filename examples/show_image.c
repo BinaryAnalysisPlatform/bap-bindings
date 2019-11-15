@@ -8,9 +8,9 @@
 // for more information.
 
 int main(int argc, const char **argv) {
-    bap_error_t *er = bap_init2(argc, argv, NULL);
+    int r = bap_init2(argc, argv, NULL);
 
-    if (er) {
+    if (r) {
         printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }
@@ -21,7 +21,7 @@ int main(int argc, const char **argv) {
     }
 
 
-    bap_image_t *img = bap_image_create((char *)argv[1], "llvm");
+    bap_image_t *img = bap_image_create((char *)argv[1], NULL);
 
     if (!img) {
         fprintf(stderr, "Failed to read file: %s\n", bap_error_get());

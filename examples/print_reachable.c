@@ -85,9 +85,9 @@ static bap_project_t *print_reachable(bap_project_t *proj, void *data) {
 // Of course, we can just run our pass directly, without registering
 // it, but it will defeat the whole purpose of demonstation.
 int main(int argc, const char **argv) {
-    bap_error_t *er = bap_init2(argc, argv, NULL);
+    int r = bap_init2(argc, argv, NULL);
 
-    if (er) {
+    if (r) {
         printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }
@@ -106,7 +106,7 @@ int main(int argc, const char **argv) {
 
     struct bap_project_parameters_t params = {0};
 
-    bap_project_input_t *input = bap_project_input_file((char *)argv[1], "llvm");
+    bap_project_input_t *input = bap_project_input_file((char *)argv[1], NULL);
     bap_project_t *proj = bap_project_create(input, &params);
 
     if (!proj) {

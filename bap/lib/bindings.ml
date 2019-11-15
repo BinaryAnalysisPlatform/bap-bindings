@@ -1459,7 +1459,9 @@ struct
     ;;
 
     def "create" C.(string @-> string_opt @-> returning !?t)
-      (fun path backend -> lift_result (Image.create ?backend path));
+      (fun path backend ->
+        let backend = Option.value ~default:"llvm" backend in
+        lift_result (Image.create ~backend path));
 
     def "of_data"
       C.(ptr char @-> int @-> string_opt @-> returning !?t )
@@ -2506,7 +2508,9 @@ struct
       let def name typ impl = def ("input_" ^ name) typ impl;;
 
       def "file" C.(string @-> string_opt @-> returning !!t)
-        (fun filename loader -> Project.Input.file ?loader ~filename);
+        (fun filename loader ->
+          let loader = Option.value ~default:"llvm" loader in
+          Project.Input.file ~loader ~filename);
       def "binary"
         C.(string @-> Arch.total @-> !?Word.t @-> returning !!t)
         (fun filename arch base ->
@@ -2748,8 +2752,6 @@ struct
 
   module Main = struct
 
-    let init_error : Bap_main.error opaque = Opaque.newtype "error"
-
     type params = Params
 
     let params : params C.structure ctype =
@@ -2779,12 +2781,13 @@ struct
         let ar = get fld in
         if C.is_null ar then None
         else Some (list_of_nullterminated_array ar) in
-      let error e = Error.failf "%a" Bap_main.Extension.Error.pp e in
       let check = function
-        | Ok () -> None
+        | Ok () -> 0
         | Error e ->
-           let _ = Error.lift (error e) in
-           Some e in
+           let _ =
+             Error.lift @@
+             Error.failf "%a" Bap_main.Extension.Error.pp e in
+           -1 in
       if C.is_null params then Bap_main.init () |> check
       else
         let features = listo features in
@@ -2798,7 +2801,7 @@ struct
         Bap_main.init ?features ?requires ?library ?argv ?env ?man
           ?name ?version () |> check
 
-    let () = def "_main_init" C.(ptr params @-> returning !?init_error) init
+    let () = def "_main_init" C.(ptr params @-> returning int) init
 
   end
 end
