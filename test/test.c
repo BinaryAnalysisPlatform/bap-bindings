@@ -66,9 +66,8 @@ bap_project_t *dead_taint_analysis(bap_project_t *proj, void *unused) {
 
 
 int main(int argc, const char **argv) {
-    int r = bap_init2(argc, argv, NULL);
 
-    if (r) {
+    if (bap_init2(argc, argv, NULL)) {
         printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }

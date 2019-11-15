@@ -46,9 +46,7 @@ bool its_my_pass(bap_bil_pass_t *c, void *x) {
 
 int main(int argc, const char **argv) {
     //init caml runtime, init IO
-    int r = bap_init2(argc, argv, NULL);
-
-    if (r) {
+    if (bap_init2(argc, argv, NULL)) {
         printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }
