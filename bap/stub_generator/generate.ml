@@ -27,8 +27,10 @@ let generate dirname =
 extern \"C\" {
 #endif
 
-void bap_init(int argc, const char *argv[]);
 %a
+void bap_init(int argc, const char *argv[]);
+int bap_init2(int argc, const char *argv[], struct bap_parameters_t *pars);
+
 #ifdef __cplusplus
 }
 #endif@\n%!"

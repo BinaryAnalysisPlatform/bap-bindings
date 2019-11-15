@@ -46,11 +46,13 @@ bool its_my_pass(bap_bil_pass_t *c, void *x) {
 
 int main(int argc, const char **argv) {
     //init caml runtime, init IO
-    bap_init(argc, argv);
+    if (bap_init2(argc, argv, NULL)) {
+        printf("failed to initialize BAP: %s\n", bap_error_get());
+        return 1;
+    }
 
-    // load BAP plugins
-    if (bap_load_plugins() < 0) {
-        fprintf(stderr, "Failed to load BAP plugins\n");
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
         return 1;
     }
 

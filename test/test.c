@@ -66,24 +66,16 @@ bap_project_t *dead_taint_analysis(bap_project_t *proj, void *unused) {
 
 
 int main(int argc, const char **argv) {
-    bap_init(argc, argv);
-    int res = bap_load_plugins();
-    if (res < 0) {
-        printf("Failed to load BAP plugins\n");
+
+    if (bap_init2(argc, argv, NULL)) {
+        printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }
 
     printf("BAP.%s was succesfully initialized\n", bap_version());
 
-    struct bap_project_parameters_t params = {0};
-    params.rooter = bap_rooter_factory_find("byteweight");
-    params.symbolizer = bap_symbolizer_factory_find("objdump");
-    if (params.rooter == NULL) {
-        printf("Warning: byteweight is not installed\n");
-    }
-
     bap_project_input_t * input = bap_project_input_file("/bin/true", NULL);
-    bap_project_t *proj = bap_project_create(input, &params);
+    bap_project_t *proj = bap_project_create(input, NULL);
 
     if (!proj) {
         printf("failed to create a project: %s\n", bap_error_get());

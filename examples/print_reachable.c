@@ -85,11 +85,9 @@ static bap_project_t *print_reachable(bap_project_t *proj, void *data) {
 // Of course, we can just run our pass directly, without registering
 // it, but it will defeat the whole purpose of demonstation.
 int main(int argc, const char **argv) {
-    bap_init(argc, argv);
 
-    // if you want to load BAP plugins
-    if (bap_load_plugins() < 0) {
-        fprintf(stderr, "Failed to load BAP plugins\n");
+    if (bap_init2(argc, argv, NULL)) {
+        printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }
 
@@ -106,20 +104,6 @@ int main(int argc, const char **argv) {
 
 
     struct bap_project_parameters_t params = {0};
-    params.rooter = bap_rooter_factory_find("byteweight");
-    params.symbolizer = bap_symbolizer_factory_find("objdump");
-
-    // if byteweight is not installed, we might not find all the functions
-    // in the binary.
-    if (params.rooter == NULL)
-        fprintf(stderr, "Warning: byteweight is not installed\n");
-
-    // we can rely on objdump for better function name identification,
-    // if objdump is not available, then we may miss some names,
-    // including the main function.
-    if (params.symbolizer == NULL)
-        fprintf(stderr, "Warning: symbolizer wasn't found\n");
-
 
     bap_project_input_t *input = bap_project_input_file((char *)argv[1], NULL);
     bap_project_t *proj = bap_project_create(input, &params);

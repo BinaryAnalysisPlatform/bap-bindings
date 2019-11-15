@@ -8,10 +8,9 @@
 // for more information.
 
 int main(int argc, const char **argv) {
-    bap_init(argc, argv);
 
-    if (bap_load_plugins() < 0) {
-        fprintf(stderr, "Failed to load BAP plugins\n");
+    if (bap_init2(argc, argv, NULL)) {
+        printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }
 
