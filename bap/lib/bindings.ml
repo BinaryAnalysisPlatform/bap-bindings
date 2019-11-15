@@ -820,7 +820,7 @@ struct
         module T = Type
       end)
     module Tag = struct
-      type t = [`Imm | `Mem] [@@deriving enumerate, sexp, compare]
+      type t = [`Imm | `Mem | `Unk ] [@@deriving enumerate, sexp, compare]
     end
 
     let enum = Enum.define (module Tag) "type_tag"
@@ -829,6 +829,7 @@ struct
     let to_tag = function
       | Type.Imm _ -> `Imm
       | Type.Mem _ -> `Mem
+      | Type.Unk   -> `Unk
 
     let imm_size = function
       | Type.Imm x -> Some x
