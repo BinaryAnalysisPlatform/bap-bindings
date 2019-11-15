@@ -8,7 +8,7 @@
 // for more information.
 
 int main(int argc, const char **argv) {
-    bap_init_error_t *er = bap_init2(argc, argv, NULL);
+    bap_error_t *er = bap_init2(argc, argv, NULL);
 
     if (er) {
         printf("failed to initialize BAP: %s\n", bap_error_get());

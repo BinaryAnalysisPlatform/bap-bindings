@@ -2748,12 +2748,12 @@ struct
 
   module Main = struct
 
-    let init_error : Bap_main.error opaque = Opaque.newtype "init_error"
+    let init_error : Bap_main.error opaque = Opaque.newtype "error"
 
     type params = Params
 
     let params : params C.structure ctype =
-      C.structure "bap_main_parameters_t"
+      C.structure "bap_parameters_t"
 
     let list_t name = C.field params name C.(ptr string_opt)
     let str_opt name = C.field params name C.string_opt
