@@ -13,7 +13,7 @@ SYSTEM=@SYSTEM@
 EXTDLL=@EXTDLL@
 OCAMLCC=@OCAMLCC@
 $(shell mkdir -p $(BUILDDIR) $(BUILDDIR)/stub $(BUILDDIR)/lib $(BUILDDIR)/stub_generator $(BUILDDIR)/test $(BUILDDIR)/generated)
-PACKAGES=$(LIBRARY),bap.plugins,ctypes.stubs,ctypes.foreign,findlib.dynload
+PACKAGES=$(LIBRARY),bap-plugins,ctypes.stubs,ctypes.foreign,findlib.dynload,bap-main
 
 BINDINGS=$(BUILDDIR)/lib/bindings.cmx
 

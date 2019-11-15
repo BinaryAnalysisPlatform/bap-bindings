@@ -2744,4 +2744,55 @@ struct
       register_string_tag Image.Bap.section;
       register_string_tag Image.Bap.symbol;
   end
+
+  module Main = struct
+      type params = Params
+
+      let params : params C.structure ctype =
+        C.structure "bap_main_parameters_t"
+
+      let list_t name = C.field params name C.(ptr string_opt)
+      let str_opt name = C.field params name C.string_opt
+
+      let features = list_t "features"
+      let requires = list_t "requires"
+      let library  = list_t "library"
+      let argv     = list_t "argv"
+      let env      =
+        C.field params "env" C.(fn_opt (string @-> returning string_opt))
+
+      let man = str_opt "man"
+      let name = str_opt "name"
+      let version = str_opt "version"
+
+      let () =
+        C.seal params;
+        Internal.structure params
+
+      let init params =
+        let get fld = C.getf C.(!@params) fld in
+        let list fld = list_of_nullterminated_array (get fld) in
+        let listo fld = match list fld with
+          | [] -> None
+          | xs -> Some xs in
+        let error e = Error.failf "%a" Bap_main.Extension.Error.pp e in
+        let check = function
+          | Ok () -> 0
+          | Error e -> Error.lift (error e) |> ignore; 1 in
+        if C.is_null params then Bap_main.init () |> check
+        else
+          let features = listo features in
+          let requires = listo requires in
+          let library  = listo library  in
+          let argv = listo argv |> Option.map ~f:Array.of_list in
+          let env  = get env in
+          let man  = get man in
+          let name = get name inx
+          let version = get version in
+          Bap_main.init ?features ?requires ?library ?argv ?env ?man
+            ?name ?version () |> check
+
+      let () = def "main_init" C.(ptr params @-> returning int) init
+
+  end
 end
