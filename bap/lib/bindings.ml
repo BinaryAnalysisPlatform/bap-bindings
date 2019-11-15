@@ -2746,53 +2746,58 @@ struct
   end
 
   module Main = struct
-      type params = Params
 
-      let params : params C.structure ctype =
-        C.structure "bap_main_parameters_t"
+    let init_error : Bap_main.error opaque = Opaque.newtype "init_error"
 
-      let list_t name = C.field params name C.(ptr string_opt)
-      let str_opt name = C.field params name C.string_opt
+    type params = Params
 
-      let features = list_t "features"
-      let requires = list_t "requires"
-      let library  = list_t "library"
-      let argv     = list_t "argv"
-      let env      =
-        C.field params "env" C.(fn_opt (string @-> returning string_opt))
+    let params : params C.structure ctype =
+      C.structure "bap_main_parameters_t"
 
-      let man = str_opt "man"
-      let name = str_opt "name"
-      let version = str_opt "version"
+    let list_t name = C.field params name C.(ptr string_opt)
+    let str_opt name = C.field params name C.string_opt
 
-      let () =
-        C.seal params;
-        Internal.structure params
+    let features = list_t "features"
+    let requires = list_t "requires"
+    let library  = list_t "library"
+    let argv     = list_t "argv"
+    let env      =
+      C.field params "env" C.(fn_opt (string @-> returning string_opt))
 
-      let init params =
-        let get fld = C.getf C.(!@params) fld in
-        let list fld = list_of_nullterminated_array (get fld) in
-        let listo fld = match list fld with
-          | [] -> None
-          | xs -> Some xs in
-        let error e = Error.failf "%a" Bap_main.Extension.Error.pp e in
-        let check = function
-          | Ok () -> 0
-          | Error e -> Error.lift (error e) |> ignore; 1 in
-        if C.is_null params then Bap_main.init () |> check
-        else
-          let features = listo features in
-          let requires = listo requires in
-          let library  = listo library  in
-          let argv = listo argv |> Option.map ~f:Array.of_list in
-          let env  = get env in
-          let man  = get man in
-          let name = get name inx
-          let version = get version in
-          Bap_main.init ?features ?requires ?library ?argv ?env ?man
-            ?name ?version () |> check
+    let man = str_opt "man"
+    let name = str_opt "name"
+    let version = str_opt "version"
 
-      let () = def "main_init" C.(ptr params @-> returning int) init
+    let () =
+      C.seal params;
+      Internal.structure params
+
+    let init params =
+      let get fld = C.getf C.(!@params) fld in
+      let listo fld =
+        let ar = get fld in
+        if C.is_null ar then None
+        else Some (list_of_nullterminated_array ar) in
+      let error e = Error.failf "%a" Bap_main.Extension.Error.pp e in
+      let check = function
+        | Ok () -> None
+        | Error e ->
+           let _ = Error.lift (error e) in
+           Some e in
+      if C.is_null params then Bap_main.init () |> check
+      else
+        let features = listo features in
+        let requires = listo requires in
+        let library  = listo library  in
+        let argv = listo argv |> Option.map ~f:Array.of_list in
+        let env  = get env in
+        let man  = get man in
+        let name = get name in
+        let version = get version in
+        Bap_main.init ?features ?requires ?library ?argv ?env ?man
+          ?name ?version () |> check
+
+    let () = def "main_init" C.(ptr params @-> returning !?init_error) init
 
   end
 end
