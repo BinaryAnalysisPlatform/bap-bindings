@@ -46,11 +46,15 @@ bool its_my_pass(bap_bil_pass_t *c, void *x) {
 
 int main(int argc, const char **argv) {
     //init caml runtime, init IO
-    bap_init(argc, argv);
+    bap_init_error_t *er = bap_init2(argc, argv, NULL);
 
-    // load BAP plugins
-    if (bap_load_plugins() < 0) {
-        fprintf(stderr, "Failed to load BAP plugins\n");
+    if (er) {
+        printf("failed to initialize BAP: %s\n", bap_error_get());
+        return 1;
+    }
+
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
         return 1;
     }
 
@@ -68,7 +72,7 @@ int main(int argc, const char **argv) {
     bap_bil_pass_select(s);
 
     // create project
-    bap_project_input_t *input = bap_project_input_file((char *)argv[1], NULL);
+    bap_project_input_t *input = bap_project_input_file((char *)argv[1], "llvm");
     bap_project_t *proj = bap_project_create(input, NULL);
 
     // release pointers obtained from BAP

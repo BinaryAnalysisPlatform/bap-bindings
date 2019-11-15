@@ -2797,7 +2797,7 @@ struct
         Bap_main.init ?features ?requires ?library ?argv ?env ?man
           ?name ?version () |> check
 
-    let () = def "main_init" C.(ptr params @-> returning !?init_error) init
+    let () = def "_main_init" C.(ptr params @-> returning !?init_error) init
 
   end
 end

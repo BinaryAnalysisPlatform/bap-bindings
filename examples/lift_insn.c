@@ -9,11 +9,10 @@ char data[] = "\x48\x8d\x00\x48\x83\xec\x08\x48\x83\xc4\x08\xe8\x47\xee\xff\xff"
 
 int main(int argc, const char **argv) {
     // a call to bap_init should precede any calls to bap
-    bap_init(argc, argv);
+    bap_init_error_t *er = bap_init2(argc, argv, NULL);
 
-    // if you want to load BAP plugins
-    if (bap_load_plugins() < 0) {
-        printf("Failed to load BAP plugins\n");
+    if (er) {
+        printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }
 

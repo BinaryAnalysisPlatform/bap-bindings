@@ -8,10 +8,10 @@
 // for more information.
 
 int main(int argc, const char **argv) {
-    bap_init(argc, argv);
+    bap_init_error_t *er = bap_init2(argc, argv, NULL);
 
-    if (bap_load_plugins() < 0) {
-        fprintf(stderr, "Failed to load BAP plugins\n");
+    if (er) {
+        printf("failed to initialize BAP: %s\n", bap_error_get());
         return 1;
     }
 
@@ -21,7 +21,7 @@ int main(int argc, const char **argv) {
     }
 
 
-    bap_image_t *img = bap_image_create((char *)argv[1], NULL);
+    bap_image_t *img = bap_image_create((char *)argv[1], "llvm");
 
     if (!img) {
         fprintf(stderr, "Failed to read file: %s\n", bap_error_get());
