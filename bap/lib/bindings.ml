@@ -5,7 +5,7 @@ open Graphlib.Std
 open Bap_plugins.Std
 open Format
 module C = Ctypes
-open Polymorphic_compare
+open Poly
 
 include Self()
 
@@ -444,7 +444,7 @@ struct
         type t = elt seq
         include (struct
           include Seq
-          let mem = mem ~equal
+          let mem = Seq.mem ~equal:Poly.equal
         end : Container.S1 with type 'a t := 'a seq)
       end in
       let name = Opaque.name elt in
@@ -1460,8 +1460,8 @@ struct
 
     def "create" C.(string @-> string_opt @-> returning !?t)
       (fun path backend ->
-        let backend = Option.value ~default:"llvm" backend in
-        lift_result (Image.create ~backend path));
+         let backend = Option.value ~default:"llvm" backend in
+         lift_result (Image.create ~backend path));
 
     def "of_data"
       C.(ptr char @-> int @-> string_opt @-> returning !?t )
@@ -1756,6 +1756,7 @@ struct
   end
 
   module Rooter = struct
+    [@@@warning "-D"]
     let t : rooter opaque = Opaque.newtype "rooter"
     let def fn = def ("rooter_" ^ fn);;
     Source.factory (module Rooter.Factory) Source.rooter "rooter";
@@ -1765,11 +1766,13 @@ struct
   end
 
   module Brancher = struct
+    [@@@warning "-D"]
     let t : brancher opaque = Opaque.newtype "brancher";;
     Source.factory (module Brancher.Factory) Source.brancher "brancher"
   end
 
   module Symbolizer = struct
+    [@@@warning "-D"]
     let t : symbolizer opaque = Opaque.newtype "symbolizer";;
     Source.factory (module Symbolizer.Factory) Source.symbolizer "symbolizer"
   end
@@ -2509,8 +2512,8 @@ struct
 
       def "file" C.(string @-> string_opt @-> returning !!t)
         (fun filename loader ->
-          let loader = Option.value ~default:"llvm" loader in
-          Project.Input.file ~loader ~filename);
+           let loader = Option.value ~default:"llvm" loader in
+           Project.Input.file ~loader ~filename);
       def "binary"
         C.(string @-> Arch.total @-> !?Word.t @-> returning !!t)
         (fun filename arch base ->
@@ -2784,10 +2787,10 @@ struct
       let check = function
         | Ok () -> 0
         | Error e ->
-           let _ =
-             Error.lift @@
-             Error.failf "%a" Bap_main.Extension.Error.pp e in
-           -1 in
+          let _ =
+            Error.lift @@
+            Error.failf "%a" Bap_main.Extension.Error.pp e in
+          -1 in
       if C.is_null params then Bap_main.init () |> check
       else
         let features = listo features in
