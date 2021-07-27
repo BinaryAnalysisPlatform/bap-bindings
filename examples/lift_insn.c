@@ -16,7 +16,7 @@ int main(int argc, const char **argv) {
     }
 
     // all OCaml values are visible as opaque structures in C
-    bap_word_t *base = bap_word_of_int(32,0x80000);
+    bap_word_t *base = bap_word_of_int(64,0x80000);
 
     bap_memory_t *mem = bap_memory_create(BAP_ENDIAN_LITTLE,
                                           base, data, sizeof(data));
