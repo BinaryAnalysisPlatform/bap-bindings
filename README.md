@@ -32,7 +32,7 @@ suggested:
 
 ## Requirements
 
-* BAP 1.x.x
+* BAP 2.x.x
 * OCaml 4.03+ with PIC runtime
 * GCC
 * Patience (it takes some time to generate the bindings)
