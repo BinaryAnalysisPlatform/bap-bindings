@@ -16,10 +16,15 @@ let generate dirname =
       (Cstubs_inverted.write_c ~prefix) stubs;
 
     fprintf (formatter_of_out_channel h_fd)
-"#include <stdint.h>
+      "
+#include <stdint.h>
 #include <stdlib.h>
 
 #ifdef __cplusplus
+#if __cplusplus > 201703L
+#define requires requires_
+#define BAP_RENAMES_REQUIRES
+#endif
 #ifndef __bool_true_false_are_defined
 #include <cstdbool>
 #endif
@@ -32,9 +37,14 @@ void bap_init(int argc, const char *argv[]);
 int bap_init2(int argc, const char *argv[], struct bap_parameters_t *pars);
 
 #ifdef __cplusplus
+
+#ifdef BAP_RENAMES_REQUIRES
+#undef requires
+#endif
+
 }
 #endif@\n%!"
-    (Cstubs_inverted.write_c_header ~prefix) stubs;
+      (Cstubs_inverted.write_c_header ~prefix) stubs;
 
   end;
   close_out h_fd;
