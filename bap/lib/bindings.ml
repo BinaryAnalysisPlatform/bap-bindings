@@ -1871,13 +1871,10 @@ struct
         let unknown_semantics = Error.failf "unknown semantics"
         let unknown _ _ = unknown_semantics
 
-        let default_backend () = match Dis.available_backends () with
-          | [] -> Error.failf "no disassemblers are available"
-          | x :: _ -> Ok x
+        let default_backend = "llvm"
 
         let create arch =
-          default_backend () >>= fun backend ->
-          Dis.create ~backend (Arch.to_string arch) >>| fun disasm -> {
+          Dis.create ~backend:default_backend (Arch.to_string arch) >>| fun disasm -> {
             disasm; lifter = lifter_of_arch arch;
             endian = Arch.endian arch;
             awidth = Size.in_bits (Arch.addr_size arch);
@@ -1886,7 +1883,7 @@ struct
         let create_expert target backend cpu awidth endian debug_level =
           let backend = match backend with
             | Some backend -> Ok backend
-            | None -> default_backend () in
+            | None -> Ok default_backend in
           backend >>= fun backend ->
           Dis.create ~debug_level ?cpu ~backend target >>| fun disasm ->
           match Arch.of_string target with
